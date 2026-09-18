@@ -30,3 +30,9 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# SQLite database
+*.db
+
+# Windows system cache (literal %SystemDrive% dir created by unexpanded env var)
+%SystemDrive%/
