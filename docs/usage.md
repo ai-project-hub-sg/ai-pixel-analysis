@@ -58,9 +58,9 @@ ai-pixel-analysis web [-addr :8080] [-db ai-pixel.db]
 
 以只读模式打开 sqlite 并启动本地 web 服务，浏览器访问 http://localhost:8080。
 
-> 提示：Windows 下直接双击 `start-web.bat` 即可启动（无需手动开 cmd）。脚本会交互式询问：①监听端口（默认 8080，回车用默认；非数字/超范围/被占用都会明确报错并重输）②是否启用数据同步（默认 Y 启用，回车用默认；只认 Y/N，其他输入报错重输）。直接双击 `ai-pixel-analysis.exe`（不带参数）不会启动 web，只会打印用法后退出。
+> 提示：Windows 下直接双击 `start-web.bat` 即可启动。bat 只做引导调用同目录 `start-web.ps1`（交互逻辑全在 ps1：端口默认 8080、同步默认 Y，回车用默认；非法输入报错+示例重输；q 退出）。这样设计是因为 cmd 按字节解析 .bat，UTF-8 中文注释会被误判为命令报 "is not recognized"；PowerShell 按字符解析，中文注释/字符串完全安全，所以逻辑放 ps1、bat 保持纯 ASCII。直接双击 `ai-pixel-analysis.exe`（不带参数）不会启动 web。
 >
-> 关闭残留后台进程：若服务驻留后台想彻底关掉，双击 `stop-web.bat`——调用同目录 `stop-web.ps1` 自动检测所有 `ai-pixel-analysis.exe` 进程并逐一关闭，结束后停在窗口按任意键退出（两文件需放一起，ps1 输出为英文是为避免编码误读）。
+> 关闭残留后台进程：若服务驻留后台想彻底关掉，双击 `stop-web.bat`——引导调用同目录 `stop-web.ps1` 检测并关闭所有 `ai-pixel-analysis.exe` 进程，结束后停在窗口按任意键退出（bat 纯 ASCII 只做引导，中文逻辑全在 ps1）。
 
 - 默认只读：不加载 .env、不接触加密凭据；数据库 mode=ro。
 - 加 `-sync` 启用"数据同步"页签（start-web.bat 已带）：后台 worker 用可写连接+解密会话抓取；所有分析接口仍走只读连接，机密不回显。
