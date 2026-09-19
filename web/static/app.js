@@ -564,8 +564,34 @@ function cgHide() { const m = CG.mask(); if (m) m.style.display = 'none'; }
 function cgShowStopped() {
   const dlg = document.querySelector('.cg-dialog');
   if (!dlg) return;
-  dlg.innerHTML = '<h3>服务已停止</h3><p class="cg-text">后台同步服务已关闭，数据分析界面将不可用。可以直接关闭本页。</p>' +
-    '<div class="cg-btns"><button class="btn primary" onclick="window.close()">关闭本页</button></div>';
+  dlg.innerHTML = '<h3>服务已停止</h3><p class="cg-text">后台同步服务已关闭，数据分析界面已不可用。可以直接关闭本页。</p>' +
+    '<div class="cg-btns"><button class="btn primary" id="cgClosePageBtn">关闭本页</button></div>';
+  const btn = document.getElementById('cgClosePageBtn');
+  if (btn) btn.addEventListener('click', cgClosePage);
+}
+
+// 浏览器限制：window.close() 只对脚本 window.open 打开的窗口生效，
+// 用户手动打开的标签页会被静默忽略。因此先尝试 close，再无条件把页面
+// 替换为"安全提示页"——能关则关，关不掉用户也能看到明确提示。
+function cgClosePage() {
+  try { window.close(); } catch (e) {}
+  // 给 window.close 一个极短的生效窗口；若页面还在（绝大多数情况），展示安全提示
+  setTimeout(cgRenderSafeScreen, 250);
+}
+
+// 把整页替换为安全提示：停掉全部轮询/定时器，页面不再发任何请求。
+function cgRenderSafeScreen() {
+  if (__dataVerTimer) { clearInterval(__dataVerTimer); __dataVerTimer = null; }
+  if (syncTimer) { clearInterval(syncTimer); syncTimer = null; }
+  document.body.innerHTML =
+    '<div class="safe-screen">' +
+      '<div class="safe-card">' +
+        '<div class="safe-ico">&#10003;</div>' +
+        '<h2>服务已停止</h2>' +
+        '<p>数据分析服务与后台同步均已关闭，本页面与服务器已无任何连接。</p>' +
+        '<p class="dim">可以直接关闭此标签页。下次使用请重新运行 start-web.bat。</p>' +
+      '</div>' +
+    '</div>';
 }
 
 // 弹窗按钮

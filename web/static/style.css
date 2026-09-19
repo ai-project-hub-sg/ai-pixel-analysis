@@ -87,3 +87,12 @@ footer{color:var(--dim);font-size:12px;padding:20px;border-top:1px solid var(--l
 .btn.danger{background:#5a2430;border-color:#7a2f3d;color:#ffb3ba}
 .btn.danger:hover:not(:disabled){background:#6e2c3a}
 .cg-hint{color:var(--dim);font-size:11px;margin-top:14px}
+
+
+/* ===== 服务已停止·安全提示页 ===== */
+.safe-screen{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center}
+.safe-card{max-width:420px;text-align:center;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:44px 36px}
+.safe-ico{width:52px;height:52px;margin:0 auto 18px;border-radius:50%;background:#14452f;color:var(--grn);font-size:26px;line-height:52px}
+.safe-card h2{font-size:19px;margin-bottom:12px}
+.safe-card p{font-size:13px;color:var(--txt);margin-bottom:10px}
+.safe-card p.dim{color:var(--dim);font-size:12px;margin-bottom:0}
