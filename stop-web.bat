@@ -1,8 +1,8 @@
 @echo off
 chcp 65001 >nul
-:: 检测并关闭残留的 ai-pixel-analysis 后台进程
-:: 查找/关闭逻辑在同目录 stop-web.ps1（避免 cmd 嵌套 PowerShell 的引号转义问题）；
-:: ps1 输出为英文是为防止无 BOM 脚本被按 ANSI 误读，这里用 echo 补中文说明。
+:: stop-web helper (calls stop-web.ps1)
+:: stop-web helper (calls stop-web.ps1)
+:: stop-web helper (calls stop-web.ps1)
 cd /d "%~dp0"
 
 echo ==========================================
