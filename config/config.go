@@ -19,10 +19,10 @@ type User struct {
 
 // Config 保存从 .env 加载的全部配置
 type Config struct {
-	Host       string
-	LoginPort  string
-	DBSecret   string
-	Users      []User // 按编号排序
+	Host      string
+	LoginPort string
+	DBSecret  string
+	Users     []User // 按编号排序
 }
 
 // Load 读取 .env 文件并解析配置

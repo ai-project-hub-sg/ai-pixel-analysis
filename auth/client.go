@@ -24,7 +24,7 @@ type LoginResult struct {
 
 // Client 封装登录相关 HTTP 操作
 type Client struct {
-	hc  *http.Client
+	hc   *http.Client
 	host string
 }
 
@@ -61,7 +61,7 @@ func (c *Client) FetchAgreementRevision(loginPath string) (string, error) {
 		return "", fmt.Errorf("APP_CONFIG not found in login page")
 	}
 	var cfg struct {
-		LoginAgreementEnabled bool   `json:"login_agreement_enabled"`
+		LoginAgreementEnabled  bool   `json:"login_agreement_enabled"`
 		LoginAgreementRevision string `json:"login_agreement_revision"`
 	}
 	if err := json.Unmarshal(m[1], &cfg); err != nil {

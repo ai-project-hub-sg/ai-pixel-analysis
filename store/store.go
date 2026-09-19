@@ -46,6 +46,57 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
     UNIQUE(email)
 );
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_email ON auth_sessions(email);
+
+CREATE TABLE IF NOT EXISTS usage_logs (
+    id INTEGER PRIMARY KEY,
+    email TEXT NOT NULL,
+    request_id TEXT,
+    model TEXT,
+    inbound_endpoint TEXT,
+    group_id INTEGER,
+    api_key_id INTEGER,
+    account_id INTEGER,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_read_tokens INTEGER,
+    total_cost REAL,
+    actual_cost REAL,
+    rate_multiplier REAL,
+    billing_mode TEXT,
+    request_type TEXT,
+    stream INTEGER,
+    duration_ms INTEGER,
+    first_token_ms INTEGER,
+    user_agent TEXT,
+    created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_email_date ON usage_logs(email, created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_model ON usage_logs(model);
+
+CREATE TABLE IF NOT EXISTS balance_ledger (
+    id INTEGER PRIMARY KEY,
+    email TEXT NOT NULL,
+    direction TEXT,
+    amount TEXT,
+    reason TEXT,
+    ref_type TEXT,
+    ref_id INTEGER,
+    balance_after TEXT,
+    metadata TEXT,
+    created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_balance_ledger_email_date ON balance_ledger(email, created_at);
+CREATE INDEX IF NOT EXISTS idx_balance_ledger_reason ON balance_ledger(reason);
+
+CREATE TABLE IF NOT EXISTS fetch_meta (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    params TEXT,
+    item_count INTEGER,
+    raw_file TEXT,
+    fetched_at INTEGER NOT NULL
+);
 `)
 	return err
 }
@@ -154,6 +205,9 @@ func (s *Store) ListSessions() ([]string, error) {
 }
 
 func (s *Store) Close() error { return s.db.Close() }
+
+// DB 返回底层 *sql.DB 供只读查询
+func (s *Store) DB() *sql.DB { return s.db }
 
 // authResult 与 auth.LoginResult 字段镜像（避免循环依赖）
 type authResult struct {

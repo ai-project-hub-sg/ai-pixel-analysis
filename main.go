@@ -7,78 +7,199 @@ import (
 	"os"
 	"path/filepath"
 
+	"ai-pixel-analysis/api"
 	"ai-pixel-analysis/auth"
 	"ai-pixel-analysis/config"
+	"ai-pixel-analysis/pipeline"
 	"ai-pixel-analysis/store"
 )
 
 func main() {
-	envPath := flag.String("env", "", "path to .env file")
-	dbPath := flag.String("db", "ai-pixel.db", "sqlite db path")
-	flag.Parse()
+	if len(os.Args) < 2 {
+		usage()
+		os.Exit(2)
+	}
+	cmd := os.Args[1]
+	args := os.Args[2:]
 
-	ep := *envPath
+	envPath, dbPath := "", "ai-pixel.db"
+	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
+	fs.StringVar(&envPath, "env", "", "path to .env file")
+	fs.StringVar(&dbPath, "db", "ai-pixel.db", "sqlite db path")
+
+	var email string
+	var o pipeline.Options
+	fs.StringVar(&email, "email", "", "指定账号，默认全部")
+	fs.StringVar(&o.Period, "period", "", "today|yesterday|last7days")
+	fs.StringVar(&o.StartDate, "start", "", "YYYY-MM-DD")
+	fs.StringVar(&o.EndDate, "end", "", "YYYY-MM-DD")
+	fs.StringVar(&o.StartTime, "start-time", "", "RFC3339")
+	fs.StringVar(&o.EndTime, "end-time", "", "RFC3339")
+	fs.IntVar(&o.PageSize, "page-size", 100, "")
+	fs.IntVar(&o.MaxPages, "max-pages", 200, "")
+	fs.StringVar(&o.RawDir, "raw-dir", "data/raw", "")
+	fs.StringVar(&o.ExportDir, "export-dir", "data/export", "")
+
+	switch cmd {
+	case "login":
+		fs.Parse(args)
+		cfg, db := mustSetup(envPath, dbPath)
+		defer db.Close()
+		runLogin(cfg, db)
+	case "fetch":
+		fs.Parse(args)
+		cfg, db := mustSetup(envPath, dbPath)
+		defer db.Close()
+		runFetch(cfg, db, email, o)
+	case "export":
+		fs.Parse(args)
+		_, db := mustSetup(envPath, dbPath)
+		defer db.Close()
+		runExport(db, email, o.ExportDir)
+	case "all":
+		fs.Parse(args)
+		cfg, db := mustSetup(envPath, dbPath)
+		defer db.Close()
+		runLogin(cfg, db)
+		runFetch(cfg, db, email, o)
+		runExport(db, email, o.ExportDir)
+	default:
+		usage()
+		os.Exit(2)
+	}
+}
+
+func usage() {
+	fmt.Println(`用法:
+  ai-pixel-analysis <command> [flags]
+
+命令:
+  login    登录所有 .env 账号，保存 authorization/cookie 到 sqlite
+  fetch    抓取使用明细+余额流水，原始落盘+清洗入库
+  export   从数据库导出 md 报告
+  all      login + fetch + export 一键执行
+
+公共 flag:
+  -env <path>   .env 路径
+  -db <path>    sqlite 路径 (默认 ai-pixel.db)
+
+fetch/export flag:
+  -email <addr>       只处理指定账号
+  -period today       快捷周期 (today|yesterday|last7days)
+  -start YYYY-MM-DD   起始日期
+  -end YYYY-MM-DD     结束日期
+  -start-time RFC3339 精确起始时间
+  -end-time RFC3339   精确结束时间
+  -page-size N        每页条数 (默认 100)
+  -max-pages N        分页上限 (默认 200)
+  -raw-dir <dir>      原始响应目录 (默认 data/raw)
+  -export-dir <dir>   导出目录 (默认 data/export)`)
+}
+
+func mustSetup(envPath, dbPath string) (*config.Config, *store.Store) {
+	ep := envPath
 	if ep == "" {
 		ep = config.DefaultEnvPath()
 		if _, err := os.Stat(ep); err != nil {
 			ep = ".env"
 		}
 	}
-
 	cfg, err := config.Load(ep)
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
-	fmt.Printf("host=%s login_port=%s users=%d\n", cfg.Host, cfg.LoginPort, len(cfg.Users))
-
-	db, err := store.New(*dbPath, cfg.DBSecret)
+	db, err := store.New(dbPath, cfg.DBSecret)
 	if err != nil {
 		log.Fatalf("open db: %v", err)
 	}
-	defer db.Close()
-	absDB, _ := filepath.Abs(*dbPath)
-	fmt.Println("db:", absDB)
+	return cfg, db
+}
 
+func runLogin(cfg *config.Config, db *store.Store) {
 	client, err := auth.NewClient(cfg.Host)
 	if err != nil {
-		log.Fatalf("new client: %v", err)
+		log.Fatalf("new auth client: %v", err)
 	}
-
 	revision, err := client.FetchAgreementRevision(cfg.LoginPort)
 	if err != nil {
 		log.Fatalf("fetch agreement revision: %v", err)
 	}
-	if revision == "" {
-		fmt.Println("login agreement not enabled; login without revision")
-	} else {
-		fmt.Println("agreement revision:", revision)
-	}
-
 	for _, u := range cfg.Users {
-		fmt.Printf("logging in %s ...\n", u.Name)
+		fmt.Printf("login %s ... ", u.Name)
 		res, err := client.Login(u.Name, u.Password, revision)
 		if err != nil {
-			log.Printf("  login %s failed: %v", u.Name, err)
+			fmt.Printf("FAIL %v\n", err)
 			continue
 		}
-		fmt.Printf("  ok: expires_in=%ds cookies=%d bytes\n", res.ExpiresIn, len(res.Cookies))
 		ar := store.FromLoginResult(res.AccessToken, res.RefreshToken, res.TokenType, res.ExpiresIn, res.Cookies, res.User)
 		if err := db.SaveSession(u.Name, ar); err != nil {
-			log.Printf("  save %s failed: %v", u.Name, err)
+			fmt.Printf("save FAIL %v\n", err)
 			continue
 		}
-		fmt.Println("  saved")
+		fmt.Printf("ok expires_in=%ds\n", res.ExpiresIn)
 	}
+}
 
-	emails, _ := db.ListSessions()
-	fmt.Println("sessions:", emails)
+func runFetch(cfg *config.Config, db *store.Store, onlyEmail string, o pipeline.Options) {
+	emails, err := db.ListSessions()
+	if err != nil {
+		log.Fatalf("list sessions: %v", err)
+	}
+	if len(emails) == 0 {
+		log.Fatal("no sessions; run `login` first")
+	}
 	for _, e := range emails {
-		s, err := db.GetSession(e)
-		if err != nil {
-			log.Printf("  get %s: %v", e, err)
+		if onlyEmail != "" && e != onlyEmail {
 			continue
 		}
-		fmt.Printf("  %s: token_len=%d exp=%s cookie_len=%d\n",
-			e, len(s.AccessToken), s.ExpiresAt.Format("2006-01-02 15:04:05"), len(s.Cookies))
+		sess, err := db.GetSession(e)
+		if err != nil {
+			log.Printf("get session %s: %v", e, err)
+			continue
+		}
+		client, err := api.NewClient(cfg.Host, sess.TokenType, sess.AccessToken)
+		if err != nil {
+			log.Printf("api client %s: %v", e, err)
+			continue
+		}
+		f := &pipeline.Fetcher{Client: client, Store: db, Email: e}
+		res := &pipeline.Result{}
+		fmt.Printf("== fetch %s ==\n", e)
+		if err := f.FetchUsage(o, res); err != nil {
+			log.Printf("  usage: %v", err)
+		} else {
+			fmt.Printf("  usage: %d pages %d items\n", res.UsagePages, res.UsageItems)
+		}
+		if err := f.FetchLedger(o, res); err != nil {
+			log.Printf("  ledger: %v", err)
+		} else {
+			fmt.Printf("  ledger: %d pages %d items\n", res.LedgerPages, res.LedgerItems)
+		}
+		if err := f.FetchSnapshots(o, res); err != nil {
+			log.Printf("  snapshots: %v", err)
+		}
+		fmt.Printf("  raw files: %d\n", len(res.RawFiles))
+		for _, w := range res.Errors {
+			fmt.Printf("  warn: %s\n", w)
+		}
+	}
+}
+
+func runExport(db *store.Store, onlyEmail, exportDir string) {
+	emails, err := db.ListSessions()
+	if err != nil {
+		log.Fatalf("list sessions: %v", err)
+	}
+	for _, e := range emails {
+		if onlyEmail != "" && e != onlyEmail {
+			continue
+		}
+		path, err := pipeline.ExportMarkdown(db, e, exportDir)
+		if err != nil {
+			log.Printf("export %s: %v", e, err)
+			continue
+		}
+		abs, _ := filepath.Abs(path)
+		fmt.Println("export", e, "->", abs)
 	}
 }

@@ -36,3 +36,8 @@ go.work.sum
 
 # Windows system cache (literal %SystemDrive% dir created by unexpanded env var)
 %SystemDrive%/
+
+# fetched data & local caches
+data/
+.gocache/
+.probe/

@@ -9,12 +9,13 @@
 以下为项目进度
 1.实现通过登录接口进行登录，获取authorization和cookie供后续业务调用，状态已完成。可以通过chrome先抓包一下登录相关的代码和数据。人在登录的时候发现login接口post的payload除了账户密码外还有个login_agreement_revision，这个怎么来的，需要弄清楚。不然go登录会有问题。获取到authorization和cookie存储在sqlite中。供后续使用
 
-2.获取数据，未开始
-2.1使用chrome登录后，从左侧选项栏选到->我的账号->查看统计,点击后获取额度窗口，使用汇总，用量拆分->模型的数据，几个维度的请求接口，请求参数。返回格式。返回值。
-2.2使用chrome登录后，从左侧选项栏选到->使用记录->余额流水,获取请求接口，请求参数。返回格式。返回值。
-2.3根据相关接口，请求当日数据，需要预留接口，允许用户按照日期，日期区间，日期时间区间获取数据。
-2.4.将原始数据落盘到临时文件
-2.5.根据获取到的数据，给出一份需要清洗整理好进入数据库，等待分析的数据字段，以及选取和放弃字段的原因。
-2.6.从临时文件抽取数据，清洗，按照标准格式存入数据库。
-2.7从数据库导出一份，md格式，整理为方便供人来查阅的格式。
-重要:只允许请求数据，严禁对账号进行增删改操作。
+2.获取数据，状态已完成。以下为具体实现情况：
+2.1已确认"我的账号->查看统计"页涉及接口：使用明细 GET /api/v1/usage（分页）、使用汇总 GET /api/v1/usage/stats、额度窗口 GET /api/v1/usage/dashboard/stats、趋势 GET /api/v1/usage/dashboard/trend、模型拆分 GET /api/v1/usage/dashboard/models。请求参数与返回结构见 docs/api.md。
+2.2已确认"使用记录->余额流水"页接口：分页流水 GET /api/v1/usage/balance-ledger、流水汇总 GET /api/v1/usage/balance-ledger/stats。
+2.3已实现按日期区间(-start/-end)、精确时间区间(-start-time/-end-time)、快捷周期(-period today|yesterday|last7days|last30days)抓取数据。
+2.4原始响应逐页落盘到 data/raw/<类别>/<账号>__<范围>_p<页码>.json。
+2.5清洗字段取舍见 docs/api.md 字段表；只保留计费与分析必需字段，丢弃每条重复的 user/api_key/group 嵌套对象。
+2.6清洗后 upsert 进 sqlite 的 usage_logs 与 balance_ledger 表（含 metadata 明细）。
+2.7 export 命令从数据库生成 md 报告（汇总/按模型/按天/流水分类/最近50条含使用者、key、账户、请求ID）。
+
+使用方式见 docs/usage.md。重要:只允许请求数据，严禁对账号进行增删改操作。
