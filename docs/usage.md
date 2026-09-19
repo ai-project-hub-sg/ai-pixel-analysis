@@ -58,7 +58,9 @@ ai-pixel-analysis web [-addr :8080] [-db ai-pixel.db]
 
 以只读模式打开 sqlite 并启动本地 web 服务，浏览器访问 http://localhost:8080。
 
-> 提示：Windows 下直接双击 `start-web.bat` 即可启动（无需手动开 cmd）；脚本与 exe 同目录，服务运行期间保持窗口开启，关闭窗口即停止。注意：直接双击 `ai-pixel-analysis.exe`（不带参数）不会启动 web，只会打印用法后退出。
+> 提示：Windows 下直接双击 `start-web.bat` 即可启动（无需手动开 cmd）。脚本会交互式询问：①监听端口（默认 8080，回车用默认；非数字/超范围/被占用都会明确报错并重输）②是否启用数据同步（默认 Y 启用，回车用默认；只认 Y/N，其他输入报错重输）。直接双击 `ai-pixel-analysis.exe`（不带参数）不会启动 web，只会打印用法后退出。
+>
+> 关闭残留后台进程：若服务驻留后台想彻底关掉，双击 `stop-web.bat`——自动检测所有 `ai-pixel-analysis.exe` 进程并逐一关闭，结束后停在窗口按任意键退出。
 
 - 默认只读：不加载 .env、不接触加密凭据；数据库 mode=ro。
 - 加 `-sync` 启用"数据同步"页签（start-web.bat 已带）：后台 worker 用可写连接+解密会话抓取；所有分析接口仍走只读连接，机密不回显。
