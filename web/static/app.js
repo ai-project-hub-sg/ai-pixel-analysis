@@ -471,6 +471,7 @@ let __dataVerTimer = null;
 async function pollDataVersion() {
   try {
     const d = await api('/api/sync/status');
+    cgMarkOnline();                            // 能连上 = 服务在线
     if (!d.sync_enabled) return;              // 未启用同步：无需轮询
     const st = d.status || {};
     const v = st.data_version || 0;
@@ -487,7 +488,7 @@ async function pollDataVersion() {
         flashNow('数据已更新 ' + new Date().toLocaleTimeString('zh-CN', {hour12:false}));
       }
     }
-  } catch (e) { /* 网络抖动忽略，下轮再试 */ }
+  } catch (e) { cgMarkOffline(); /* 连续失败会触发离线提示页 */ }
 }
 
 // 在右上角时间旁短暂提示"数据已更新"（3s 后恢复，不额外触发刷新）
@@ -507,16 +508,39 @@ function startDataVerWatch() {
 }
 startDataVerWatch();
 
+// ===== 服务离线检测 =====
+// 连续若干次 /api/sync/status 失败 = 后端已退出（例如被「关闭服务」停掉）。
+// 此时不应让用户面对空白页干等——明确显示"服务离线"提示页，引导重启 start-web。
+let __apiFailCount = 0;
+const __OFFLINE_THRESHOLD = 4; // 连续4次(约12s)连不上才判定离线，容忍单次抖动
+
+function cgMarkOnline() { __apiFailCount = 0; }
+function cgMarkOffline() {
+  if (++__apiFailCount < __OFFLINE_THRESHOLD) return;
+  if (document.getElementById('cgOffline')) return; // 已显示
+  if (__dataVerTimer) { clearInterval(__dataVerTimer); __dataVerTimer = null; }
+  if (syncTimer) { clearInterval(syncTimer); syncTimer = null; }
+  const div = document.createElement('div');
+  div.id = 'cgOffline';
+  div.innerHTML =
+    '<div class="safe-screen"><div class="safe-card">' +
+      '<div class="safe-ico" style="background:#4d1f28;color:#ff7a88">!</div>' +
+      '<h2>服务已离线</h2>' +
+      '<p>无法连接到数据分析服务，服务可能已被关闭或退出。</p>' +
+      '<p class="dim">如需继续使用，请重新运行 start-web.bat 启动服务，然后刷新本页。</p>' +
+    '</div></div>';
+  document.body.appendChild(div);
+}
+
 
 // ===== 关闭页面提醒（后台服务驻留提示）=====
 // 场景：关闭/刷新/跳转页面时，若后端开启了同步服务，弹窗让用户选择
 // "保留后台服务"（继续驻留同步）或"关闭服务"（POST /api/lifecycle/shutdown）。
-// 勾选"不再提醒"后直接按所选方式执行，不再弹窗。
-// 存储说明：不再提醒+行为选择存 localStorage（本机浏览器）；同时把行为
-// 同步到后端内存（/api/lifecycle/close-pref），供"静默关闭"时判定。
-// 限制：浏览器不允许页面脚本真正关闭用户手动开的标签页，且 beforeunload
-// 里无法弹出自定义 UI；因此对"关闭"动作的可靠拦截是 beforeunload 原生确认框 +
-// sendBeacon 发动作。完整体验 = 页面内"关闭界面"按钮（见下）。
+// 勾选"不再提醒"后，点「关闭界面」跳过弹窗直接按所选执行。
+// 存储：不再提醒+行为选择存 localStorage（本机浏览器）。
+// 重要：页面卸载（刷新/关标签/休眠回收）永不杀后端——服务独立于页面存活；
+//       "关闭服务"仅经「关闭界面」按钮+确认触发。这避免误刷新/回收误杀后端
+//       导致"后端已死、前端还在空转等数据"的假死（曾有 sendBeacon 方案已废弃）。
 
 const CG = {
   key: 'aipixel.closeGuard',            // localStorage: {noRemind, action}
@@ -629,17 +653,13 @@ function cgRenderSafeScreen() {
 // 只能给原生确认框。若用户已选"不再提醒+保留"则完全不拦；
 // 若已选"不再提醒+关闭服务"则用 sendBeacon 静默停机，不拦。
 // 默认（未设置）：有同步服务时拦一下，提示回页面用"关闭界面"按钮选择。
+// 关键原则：页面卸载（刷新/关标签/浏览器休眠回收/崩溃）永远不该杀后端。
+// "保留后台服务"的语义就是服务独立于页面存活——任何卸载都放行、不发 shutdown。
+// "关闭服务"的唯一入口是「关闭界面」按钮 + 弹窗确认（显式意图才允许停机），
+// localStorage 的 noRemind+stop 仅表示"点关闭界面时跳过弹窗"，不代表"关页面=停机"。
+// 这样误刷新/标签页回收不会再误杀后端，也不会出现"后端死了前端还在等数据"的假死。
 window.addEventListener('beforeunload', (e) => {
-  if (!__syncEnabledCache) return;
-  const saved = CG.read();
-  if (saved.noRemind) {
-    if (saved.action === 'stop') {
-      navigator.sendBeacon('/api/lifecycle/shutdown', new Blob(['{}'], { type: 'application/json' }));
-    }
-    return; // keep 或已处理：不拦
-  }
-  e.preventDefault();
-  e.returnValue = '后台同步服务仍在运行。如需选择保留/关闭服务，请留在页面用右上角"关闭界面"按钮。';
+  // 不拦截、不发请求。任何卸载都只是"页面没了"，服务照旧。
 });
 
 // 首次轮询后就知道 sync_enabled（pollDataVersion 每3s也会刷新缓存）
