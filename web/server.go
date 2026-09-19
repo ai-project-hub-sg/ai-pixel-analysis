@@ -39,7 +39,10 @@ func NewServerWithSync(db *sql.DB, sw *SyncWorker) *Server {
 func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
-	mux.Handle("/static/", http.FileServer(http.FS(staticFS)))
+	mux.Handle("/static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache") // 每次校验，避免旧 app.js 缓存导致新功能不生效
+		http.FileServer(http.FS(staticFS)).ServeHTTP(w, r)
+	}))
 	mux.HandleFunc("/api/overview", s.wrap(s.handleOverview))
 	mux.HandleFunc("/api/income/hourly", s.wrap(s.handleIncomeHourly))
 	mux.HandleFunc("/api/income/daily", s.wrap(s.handleIncomeDaily))
@@ -107,6 +110,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
 	w.Write(data)
 }
 

@@ -15,23 +15,24 @@ import (
 // SyncDeps 是同步所需的全部依赖。host 用于建 api client；store 用于读 session/写数据。
 // 注意：此 worker 是唯一持有可写 store + db_secret 的组件；分析 API 仍用只读连接。
 type SyncDeps struct {
-	Host      string
-	Store     *store.Store // 可写
-	ReadDB    *sql.DB      // 只读（与 Server 共享，用于查已有数据范围——用同一连接即可）
-	RawDir    string
-	Interval  time.Duration
+	Host     string
+	Store    *store.Store // 可写
+	ReadDB   *sql.DB      // 只读（与 Server 共享，用于查已有数据范围——用同一连接即可）
+	RawDir   string
+	Interval time.Duration
 }
 
 // SyncWorker 串行执行同步任务，维护当前任务与自动同步开关。
 type SyncWorker struct {
-	deps   *SyncDeps
-	mu     sync.Mutex
-	cur    *pipeline.Progress
-	auto   bool
-	stopCh chan struct{}
-	wake   chan struct{} // 触发一次手动/初始化同步的信号
+	deps      *SyncDeps
+	mu        sync.Mutex
+	cur       *pipeline.Progress
+	auto      bool
+	stopCh    chan struct{}
+	wake      chan struct{} // 触发一次手动/初始化同步的信号
 	lastJobID int64
-	dataVer int64        // 数据版本号：每次同步结束递增，前端据此自动刷新
+	dataVer   int64     // 数据版本号：每次同步结束递增，前端据此自动刷新
+	closeOnce sync.Once // Close 幂等：shutdown goroutine 与 runWeb defer 都可能调
 }
 
 func NewSyncWorker(d *SyncDeps) *SyncWorker {
@@ -188,13 +189,13 @@ func (w *SyncWorker) Auto() bool {
 
 // Status 返回给前端的完整状态。
 type SyncStatus struct {
-	HasData    bool                       `json:"has_data"`
-	Auto       bool                       `json:"auto"`
-	Running    bool                       `json:"running"`
-	DataVer    int64                      `json:"data_version"`
-	Current    *pipeline.Progress         `json:"current,omitempty"`
-	LatestJob  *store.SyncJobRow          `json:"latest_job,omitempty"`
-	Watermarks map[string]map[string]time.Time `json:"watermarks"`
+	HasData    bool                                  `json:"has_data"`
+	Auto       bool                                  `json:"auto"`
+	Running    bool                                  `json:"running"`
+	DataVer    int64                                 `json:"data_version"`
+	Current    *pipeline.Progress                    `json:"current,omitempty"`
+	LatestJob  *store.SyncJobRow                     `json:"latest_job,omitempty"`
+	Watermarks map[string]map[string]time.Time       `json:"watermarks"`
 	Ranges     map[string]map[string]store.DataRange `json:"ranges"`
 }
 
@@ -229,8 +230,8 @@ func (w *SyncWorker) Status() (*SyncStatus, error) {
 	return st, nil
 }
 
-func (w *SyncWorker) Close() { close(w.stopCh) }
+func (w *SyncWorker) Close() { w.closeOnce.Do(func() { close(w.stopCh) }) }
 
 // GetLatestJob 代理到 store（Server 调用）。
-func (w *SyncWorker) GetLatestJob() (*store.SyncJobRow, error) { return w.deps.Store.GetLatestJob() }
+func (w *SyncWorker) GetLatestJob() (*store.SyncJobRow, error)   { return w.deps.Store.GetLatestJob() }
 func (w *SyncWorker) ListJobs(n int) ([]store.SyncJobRow, error) { return w.deps.Store.ListSyncJobs(n) }
