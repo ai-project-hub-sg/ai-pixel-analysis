@@ -18,7 +18,7 @@ type Store struct {
 
 // New 打开(不存在则创建)数据库并初始化表
 func New(dbPath, dbSecret string) (*Store, error) {
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_foreign_keys=1")
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode%28WAL%29&_pragma=foreign_keys%281%29")
 	if err != nil {
 		return nil, err
 	}
@@ -270,7 +270,7 @@ func FromLoginResult(accessToken, refreshToken, tokenType string, expiresIn int,
 // OpenReadonly 以只读模式打开数据库（不建表），供 web 分析界面使用，
 // 保证前端任何代码路径都无法写入，符合"严禁增删改"约束。
 func OpenReadonly(dbPath string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", dbPath+"?mode=ro&_journal_mode=WAL")
+	db, err := sql.Open("sqlite", dbPath+"?mode=ro&_pragma=journal_mode%28WAL%29")
 	if err != nil {
 		return nil, err
 	}

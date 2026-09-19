@@ -326,12 +326,12 @@ func (w *SyncWorker) Relogin() (map[string]any, error) {
 	for _, u := range w.deps.Users {
 		res, err := client.Login(u.Name, u.Password, revision)
 		if err != nil {
-			fails = append(fails, u.Name)
+			fails = append(fails, u.Name+":login:"+err.Error())
 			continue
 		}
 		ar := store.FromLoginResult(res.AccessToken, res.RefreshToken, res.TokenType, res.ExpiresIn, res.Cookies, res.User)
 		if err := w.deps.Store.SaveSession(u.Name, ar); err != nil {
-			fails = append(fails, u.Name)
+			fails = append(fails, u.Name+":save:"+err.Error())
 			continue
 		}
 		okCount++
