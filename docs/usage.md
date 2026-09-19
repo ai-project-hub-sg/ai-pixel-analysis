@@ -50,6 +50,20 @@ ai-pixel-analysis export [-email <addr>] [-export-dir data/export]
 
 从 sqlite 生成 `data/export/report_<账号>_<时间>.md`，含使用明细汇总、按模型、按天、流水分类汇总、最近 50 条流水（含使用者/使用key/调用账户/请求ID）。
 
+### web — 数据分析界面
+
+```
+ai-pixel-analysis web [-addr :8080] [-db ai-pixel.db]
+```
+
+以只读模式打开 sqlite 并启动本地 web 服务，浏览器访问 http://localhost:8080。
+
+> 提示：Windows 下直接双击 `start-web.bat` 即可启动（无需手动开 cmd）；脚本与 exe 同目录，服务运行期间保持窗口开启，关闭窗口即停止。注意：直接双击 `ai-pixel-analysis.exe`（不带参数）不会启动 web，只会打印用法后退出。
+
+- 不加载 .env、不接触加密凭据；数据库 mode=ro，任何代码路径都无法写入。
+- 顶部 tab 切换四个分页：总览 / 分账收入 / 用量分析 / 流水明细；右上角按账号筛选。
+- 前端为内嵌静态资源（embed），单 exe 即可运行，无需部署前端。
+
 ### all — 一键执行
 
 ```

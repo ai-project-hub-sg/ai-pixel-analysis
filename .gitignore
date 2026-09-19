@@ -41,3 +41,6 @@ go.work.sum
 data/
 .gocache/
 .probe/
+
+# local run logs
+*.log

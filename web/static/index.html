@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Pixel 数据分析</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="wrap bar">
+    <h1>AI Pixel 数据分析</h1>
+    <div class="controls">
+      <label>账号 <select id="emailSel"><option value="">全部</option></select></label>
+      <span id="now"></span>
+    </div>
+  </div>
+  <nav class="wrap tabs">
+    <button class="tab active" data-tab="overview">总览</button>
+    <button class="tab" data-tab="income">分账收入</button>
+    <button class="tab" data-tab="usage">用量分析</button>
+    <button class="tab" data-tab="ledger">流水明细</button>
+  </nav>
+</header>
+
+<main class="wrap">
+
+  <section id="tab-overview" class="page active">
+    <div class="grid cards" id="overviewCards"></div>
+    <div class="panel">
+      <h2>账号核心指标</h2>
+      <div class="scroll"><table id="overviewTable">
+        <thead><tr>
+          <th>账号</th><th>7D请求</th><th>7D占比</th><th>账户计费</th><th>用户扣费</th>
+          <th>分账收入</th><th>当前小时</th><th>上一小时</th><th>小时环比</th><th>小时同比</th>
+          <th>今日收入</th><th>今日时均</th><th>日环比</th><th>余额</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table></div>
+      <p class="hint">小时环比 = 当前小时 vs 上一小时；小时同比 = 当前小时 vs 昨天同一小时；日环比 = 今日 vs 昨日。分母为 0 显示 —。当前小时为进行中数据。</p>
+    </div>
+    <div class="panel">
+      <h2>分析口径与维度说明</h2>
+      <div id="notes"></div>
+    </div>
+  </section>
+
+  <section id="tab-income" class="page">
+    <div class="grid cards" id="incomeCards"></div>
+    <div class="panel">
+      <div class="panel-head"><h2>分账收入 · 逐小时</h2>
+        <select id="incomeHourlyDays"><option value="2">近 2 天</option><option value="7" selected>近 7 天</option><option value="14">近 14 天</option></select></div>
+      <div id="incomeHourlyChart" class="chart"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>分账收入 · 按天</h2>
+        <select id="incomeDailyDays"><option value="14" selected>近 14 天</option><option value="30">近 30 天</option></select></div>
+      <div id="incomeDailyChart" class="chart"></div>
+    </div>
+    <div class="grid two">
+      <div class="panel"><h2>收入 Top 使用者 (consumer_user_id)</h2><div id="topConsumer"></div></div>
+      <div class="panel"><h2>收入 Top 上游账户 (account_id)</h2><div id="topAccount"></div></div>
+    </div>
+  </section>
+
+  <section id="tab-usage" class="page">
+    <div class="grid cards" id="usageCards"></div>
+    <div class="grid two">
+      <div class="panel"><h2>按模型</h2><div class="scroll"><table id="byModelTable"><thead><tr>
+        <th>模型</th><th>请求</th><th>输入</th><th>输出</th><th>缓存读</th><th>计费</th><th>实扣</th><th>均耗时</th><th>均倍率</th>
+      </tr></thead><tbody></tbody></table></div></div>
+      <div class="panel"><h2>请求分布</h2><div id="reqDist"></div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>按天用量</h2>
+        <select id="usageDailyDays"><option value="14" selected>近 14 天</option><option value="30">近 30 天</option></select></div>
+      <div id="usageDailyChart" class="chart"></div>
+      <div class="scroll"><table id="usageDailyTable"><thead><tr>
+        <th>日期</th><th>请求</th><th>输出tokens</th><th>账户计费</th><th>用户扣费</th><th>分账收入</th><th>毛利(收入-扣费)</th>
+      </tr></thead><tbody></tbody></table></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>单日 24 小时分布</h2><input type="date" id="usageHourlyDay"></div>
+      <div id="usageHourlyChart" class="chart"></div>
+    </div>
+  </section>
+
+  <section id="tab-ledger" class="page">
+    <div class="panel">
+      <div class="filters">
+        <select id="fDir"><option value="">全部方向</option><option value="credit">credit 入账</option><option value="debit">debit 出账</option></select>
+        <select id="fReason"><option value="">全部原因</option></select>
+        <button id="fGo">查询</button>
+        <span id="ledgerTotal"></span>
+      </div>
+      <div class="scroll"><table id="ledgerTable"><thead><tr>
+        <th>时间</th><th>账号</th><th>方向</th><th>原因</th><th>金额</th><th>余额</th><th>使用者</th><th>Key</th><th>账户</th><th>请求ID</th>
+      </tr></thead><tbody></tbody></table></div>
+      <div class="pager"><button id="pgPrev">上一页</button><span id="pgInfo"></span><button id="pgNext">下一页</button></div>
+    </div>
+  </section>
+
+</main>
+<footer class="wrap">数据来自本地 sqlite（只读）；时间均为账号本地时区。</footer>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -223,3 +223,17 @@ type authResult struct {
 func FromLoginResult(accessToken, refreshToken, tokenType string, expiresIn int, cookies string, user []byte) *authResult {
 	return &authResult{AccessToken: accessToken, RefreshToken: refreshToken, TokenType: tokenType, ExpiresIn: expiresIn, Cookies: cookies, User: user}
 }
+
+// OpenReadonly 以只读模式打开数据库（不建表），供 web 分析界面使用，
+// 保证前端任何代码路径都无法写入，符合"严禁增删改"约束。
+func OpenReadonly(dbPath string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", dbPath+"?mode=ro&_journal_mode=WAL")
+	if err != nil {
+		return nil, err
+	}
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return db, nil
+}

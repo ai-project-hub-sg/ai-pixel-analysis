@@ -1,0 +1,59 @@
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0f1420;--panel:#1a2233;--panel2:#212b40;--line:#2c3a56;--txt:#e6ecf5;--dim:#8b98b0;--acc:#5b8cff;--grn:#3ecf8e;--red:#ff6b6b;--yel:#f5b942}
+body{font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--txt);font-size:14px;line-height:1.5}
+.wrap{max-width:1280px;margin:0 auto;padding:0 20px}
+header{background:var(--panel);border-bottom:1px solid var(--line);padding-top:16px}
+.bar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px}
+h1{font-size:20px;font-weight:600}
+.controls{display:flex;align-items:center;gap:14px;color:var(--dim);font-size:13px}
+.controls label{color:var(--dim)}
+select,input[type=date]{background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:5px 9px;font-size:13px}
+.tabs{display:flex;gap:4px;margin-top:14px}
+.tab{background:none;border:none;color:var(--dim);padding:10px 18px;font-size:14px;cursor:pointer;border-bottom:2px solid transparent}
+.tab:hover{color:var(--txt)}
+.tab.active{color:var(--acc);border-bottom-color:var(--acc);font-weight:600}
+main{padding:22px 0 40px}
+.page{display:none}
+.page.active{display:block}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:18px}
+.panel-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+h2{font-size:15px;font-weight:600;margin-bottom:12px}
+.panel-head h2{margin-bottom:0}
+.grid{display:grid;gap:14px}
+.grid.two{grid-template-columns:1fr 1fr}
+.grid.cards{grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-bottom:18px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card .label{color:var(--dim);font-size:12px;margin-bottom:6px}
+.card .value{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}
+.card .sub{font-size:12px;color:var(--dim);margin-top:4px}
+.card .value.pos{color:var(--grn)}.card .value.neg{color:var(--red)}
+table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
+th{text-align:left;color:var(--dim);font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:7px 10px;border-bottom:1px solid #22304a;white-space:nowrap}
+tbody tr:hover{background:#1f2940}
+.num{text-align:right}
+.pos{color:var(--grn)}.neg{color:var(--red)}.dim{color:var(--dim)}
+.scroll{overflow-x:auto}
+.chart{width:100%;min-height:220px}
+.chart svg{width:100%;height:auto;display:block}
+.hint{color:var(--dim);font-size:12px;margin-top:10px}
+.filters{display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+button{background:var(--acc);border:none;color:#fff;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:13px}
+button:hover{filter:brightness(1.1)}
+.pager{display:flex;gap:14px;align-items:center;justify-content:center;margin-top:14px;color:var(--dim)}
+.pager button{background:var(--panel2);border:1px solid var(--line)}
+.bar-row{display:flex;align-items:center;gap:10px;padding:5px 0}
+.bar-row .k{width:110px;color:var(--dim);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
+.bar-row .track{flex:1;background:var(--panel2);border-radius:4px;height:18px;position:relative}
+.bar-row .fill{height:100%;border-radius:4px;background:var(--acc)}
+.bar-row .v{width:120px;font-size:12px;font-variant-numeric:tabular-nums}
+footer{color:var(--dim);font-size:12px;padding:20px;border-top:1px solid var(--line)}
+.legend{display:flex;gap:16px;font-size:12px;color:var(--dim);margin-top:8px}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:5px;vertical-align:middle}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px}
+.tag.credit{background:#123a2c;color:var(--grn)}
+.tag.debit{background:#3a1d1d;color:var(--red)}
+#notes{color:var(--dim);font-size:13px}
+#notes h3{color:var(--txt);font-size:13px;margin:14px 0 6px}
+#notes ul{padding-left:20px}
+#notes li{margin-bottom:4px}
