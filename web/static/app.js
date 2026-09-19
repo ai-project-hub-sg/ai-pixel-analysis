@@ -542,14 +542,13 @@ async function cgChoose(action, noRemind) {
   CG.save({ action: action, noRemind: !!noRemind });
   try { await postJSON('/api/lifecycle/close-pref', { action: action }); } catch (e) {}
   if (action === 'stop') {
-    // sendBeacon 也能用，但这里是显式按钮，直接 POST 拿到结果更稳
     try { await postJSON('/api/lifecycle/shutdown'); } catch (e) {}
-    cgShowStopped();
+    // 服务已停：直接整页换成安全提示页，用户明确知道可以关标签了
+    cgRenderSafeScreen();
   } else {
     cgHide();
-    if (noRemind) {
-      // 不再提醒 + 保留：下次关闭不再弹（原生确认也不再弹，见 beforeunload）
-    }
+    // keep（保留后台服务）：页面留在原位继续可用；给个轻提示
+    flashNow('服务已保留在后台运行，可直接关闭本页');
   }
 }
 
@@ -601,15 +600,23 @@ function cgRenderSafeScreen() {
   keep.addEventListener('click', () => cgChoose('keep', CG.noRemind().checked));
   document.getElementById('cgStop').addEventListener('click', () => cgChoose('stop', CG.noRemind().checked));
   document.getElementById('cgCancel').addEventListener('click', cgHide);
-  // 头部加"关闭界面"按钮：用户主动点 = 最可靠的入口，弹窗可完整展示
   const bar = document.querySelector('.controls');
   if (bar) {
+    // 「关闭设置」：随时重开配置弹窗修改选择（破解"不再提醒"后无法再改配置的死角）
+    const gear = document.createElement('button');
+    gear.id = 'btnCloseCfg'; gear.className = 'btn'; gear.textContent = '关闭设置';
+    gear.title = '修改关闭页面时的处理方式（保留后台服务 / 关闭服务 / 是否再提醒）';
+    gear.style.marginLeft = '8px';
+    gear.addEventListener('click', cgShow);
+    bar.appendChild(gear);
+
+    // 「关闭界面」= 执行动作：不再提醒时按所选直接执行；未设置才弹窗让选
     const b = document.createElement('button');
-    b.id = 'btnCloseUI'; b.className = 'btn'; b.textContent = '关闭界面';
+    b.id = 'btnCloseUI'; b.className = 'btn primary'; b.textContent = '关闭界面';
     b.style.marginLeft = '8px';
     b.addEventListener('click', async () => {
       await cgRefreshEnabled();
-      if (!__syncEnabledCache) { window.close(); return; } // 没开同步：直接关，无需打扰
+      if (!__syncEnabledCache) { cgClosePage(); return; } // 没开同步：直接关，无需打扰
       const saved = CG.read();
       if (saved.noRemind && saved.action) { cgChoose(saved.action, true); return; }
       cgShow();
