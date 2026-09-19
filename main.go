@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"ai-pixel-analysis/api"
 	"ai-pixel-analysis/auth"
@@ -31,6 +32,8 @@ func main() {
 	var email string
 	var o pipeline.Options
 	var webAddr string
+	var webSync bool
+	var syncIntervalMs int
 	fs.StringVar(&email, "email", "", "指定账号，默认全部")
 	fs.StringVar(&o.Period, "period", "", "today|yesterday|last7days")
 	fs.StringVar(&o.StartDate, "start", "", "YYYY-MM-DD")
@@ -42,6 +45,8 @@ func main() {
 	fs.StringVar(&o.RawDir, "raw-dir", "data/raw", "")
 	fs.StringVar(&o.ExportDir, "export-dir", "data/export", "")
 	fs.StringVar(&webAddr, "addr", ":8080", "web 监听地址")
+	fs.BoolVar(&webSync, "sync", false, "web 启用数据同步（需 .env 提供 host/db_secret 以解密会话）")
+	fs.IntVar(&syncIntervalMs, "sync-interval-ms", 1200, "同步请求间隔毫秒（限速，越大越温和）")
 
 	switch cmd {
 	case "login":
@@ -61,7 +66,7 @@ func main() {
 		runExport(db, email, o.ExportDir)
 	case "web":
 		fs.Parse(args)
-		runWeb(dbPath, webAddr)
+		runWeb(dbPath, webAddr, envPath, webSync, syncIntervalMs)
 	case "all":
 		fs.Parse(args)
 		cfg, db := mustSetup(envPath, dbPath)
@@ -83,7 +88,7 @@ func usage() {
   login    登录所有 .env 账号，保存 authorization/cookie 到 sqlite
   fetch    抓取使用明细+余额流水，原始落盘+清洗入库
   export   从数据库导出 md 报告
-  web      启动数据分析 web 界面（只读）
+  web      启动数据分析 web 界面（只读；加 -sync 启用数据更新按钮）
   all      login + fetch + export 一键执行
 
 公共 flag:
@@ -103,7 +108,9 @@ fetch/export flag:
   -export-dir <dir>   导出目录 (默认 data/export)
 
 web flag:
-  -addr <addr>        监听地址 (默认 :8080)，访问 http://localhost:8080`)
+  -addr <addr>        监听地址 (默认 :8080)，访问 http://localhost:8080
+  -sync               启用数据同步按钮（需 .env；分析接口仍只读）
+  -sync-interval-ms N 同步请求间隔毫秒 (默认 1200，限速防打爆上游)`)
 }
 
 func mustSetup(envPath, dbPath string) (*config.Config, *store.Store) {
@@ -214,16 +221,50 @@ func runExport(db *store.Store, onlyEmail, exportDir string) {
 	}
 }
 
-// runWeb 以只读模式打开数据库并启动分析 web 服务。
-// 用 OpenReadonly 而非 mustSetup：web 不需要 .env/db_secret（不接触加密凭据），
-// 且 mode=ro 在驱动层就禁止任何写操作，落实"严禁增删改"。
-func runWeb(dbPath, addr string) {
+// runWeb 启动分析 web 服务。
+// 分析 API 永远用只读连接（OpenReadonly），落实"严禁增删改"。
+// 仅当 -sync 时额外加载 .env 建一个可写 store 供后台同步 worker 使用；
+// 机密只存在于进程内存用于解密 token，不回显到任何接口/日志。
+func runWeb(dbPath, addr, envPath string, enableSync bool, intervalMs int) {
 	db, err := store.OpenReadonly(dbPath)
 	if err != nil {
 		log.Fatalf("open db readonly: %v", err)
 	}
 	defer db.Close()
-	if err := web.NewServer(db).Listen(addr); err != nil {
+
+	var srv *web.Server
+	if enableSync {
+		ep := envPath
+		if ep == "" {
+			ep = config.DefaultEnvPath()
+			if _, err := os.Stat(ep); err != nil {
+				ep = ".env"
+			}
+		}
+		cfg, err := config.Load(ep)
+		if err != nil {
+			log.Fatalf("sync requires .env: %v", err)
+		}
+		wstore, err := store.New(dbPath, cfg.DBSecret)
+		if err != nil {
+			log.Fatalf("open db rw for sync: %v", err)
+		}
+		defer wstore.Close()
+		sw := web.NewSyncWorker(&web.SyncDeps{
+			Host:     cfg.Host,
+			Store:    wstore,
+			ReadDB:   db,
+			RawDir:   "data/raw",
+			Interval: time.Duration(intervalMs) * time.Millisecond,
+		})
+		defer sw.Close()
+		srv = web.NewServerWithSync(db, sw)
+		log.Printf("sync enabled: interval=%dms", intervalMs)
+	} else {
+		srv = web.NewServer(db)
+		log.Printf("sync disabled (start with -sync to enable data update buttons)")
+	}
+	if err := srv.Listen(addr); err != nil {
 		log.Fatalf("web server: %v", err)
 	}
 }

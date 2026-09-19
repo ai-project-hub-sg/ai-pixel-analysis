@@ -57,3 +57,22 @@ footer{color:var(--dim);font-size:12px;padding:20px;border-top:1px solid var(--l
 #notes h3{color:var(--txt);font-size:13px;margin:14px 0 6px}
 #notes ul{padding-left:20px}
 #notes li{margin-bottom:4px}
+
+
+/* ===== 数据同步 ===== */
+.sync-actions { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:10px; }
+.btn { background:#22304a; color:#dfe7f5; border:1px solid #33445f; border-radius:8px; padding:8px 16px; cursor:pointer; font-size:13px; }
+.btn:hover:not(:disabled) { background:#2c3f61; }
+.btn:disabled { opacity:.45; cursor:not-allowed; }
+.btn.primary { background:#2f6bff; border-color:#2f6bff; color:#fff; }
+.btn.primary:hover:not(:disabled) { background:#4a82ff; }
+.chk { display:flex; align-items:center; gap:6px; font-size:13px; color:var(--dim); cursor:pointer; }
+.chk input { accent-color:#2f6bff; width:15px; height:15px; }
+.progress-track { height:10px; background:#1a2334; border-radius:6px; overflow:hidden; margin:10px 0; }
+.progress-fill { height:100%; width:0%; background:linear-gradient(90deg,#2f6bff,#3ecf8e); transition:width .4s; }
+.tag { display:inline-block; padding:2px 8px; border-radius:6px; font-size:11px; background:#22304a; color:#8b98b0; }
+.tag.done { background:#14452f; color:#3ecf8e; }
+.tag.running { background:#1c3a6b; color:#5b8cff; }
+.tag.failed, .tag.interrupted { background:#4d1f28; color:#ff7a88; }
+.tag.skipped, .tag.pending { background:#2a2f3a; color:#8b98b0; }
+.chunk-skipped td { color:#5a6680; }

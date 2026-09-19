@@ -97,6 +97,31 @@ CREATE TABLE IF NOT EXISTS fetch_meta (
     raw_file TEXT,
     fetched_at INTEGER NOT NULL
 );
+
+-- 增量同步水位：每账号每类数据已成功覆盖到的最大 created_at。
+-- 用覆盖区间右端点（而不是最后一次运行时间）做水位，保证可断点续传：
+-- 任何 < water_mark 的数据理论上已入库；>= water_mark 的下次会重新拉（幂等 upsert）。
+CREATE TABLE IF NOT EXISTS sync_watermark (
+    email TEXT NOT NULL,
+    kind TEXT NOT NULL,          -- usage | ledger
+    watermark TEXT NOT NULL,     -- RFC3339，已覆盖到的最大 created_at（含）
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (email, kind)
+);
+
+-- 同步任务历史/状态：一行一次手动或自动同步任务
+CREATE TABLE IF NOT EXISTS sync_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trigger_kind TEXT NOT NULL,  -- init | manual | auto
+    status TEXT NOT NULL,        -- pending | running | done | failed | canceled
+    plan_json TEXT,              -- SyncPlan 序列化
+    progress_json TEXT,          -- 实时进度快照
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    started_at INTEGER,
+    finished_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_sync_jobs_id ON sync_jobs(id DESC);
 `)
 	return err
 }

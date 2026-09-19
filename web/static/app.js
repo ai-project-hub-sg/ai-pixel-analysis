@@ -110,12 +110,14 @@ async function load(t) {
   if (t === 'income')   return loadIncome();
   if (t === 'usage')    return loadUsage();
   if (t === 'ledger')   return loadLedger();
+  if (t === 'sync')     return loadSync();
 }
 
 // ===== 总览 =====
 async function loadOverview() {
   const d = await api('/api/overview');
-  $('#now').textContent = '更新于 ' + fmt.time(d.now) + ' · 当前小时 ' + d.cur_hour;
+  $('#now').textContent = '更新于 ' + fmt.time(d.now) + ' · 当前小时 ' + d.cur_hour +
+    (d.elapsed_minutes != null ? ' · 已过 ' + d.elapsed_minutes + ' 分钟(同环比按此前N分钟口径)' : '');
   const r = d.rows || [];
   const sum = f => r.reduce((a, x) => a + (x[f] || 0), 0);
   cards($('#overviewCards'), [
@@ -289,3 +291,218 @@ $('#pgNext').addEventListener('click', () => { pgOffset += pgLimit; loadLedger()
   (e.emails || []).forEach(x => { const o = document.createElement('option'); o.value = x; o.textContent = x; $('#emailSel').appendChild(o); });
   loadOverview();
 })();
+
+
+// ===== 数据同步 =====
+let syncTimer = null;
+
+async function postJSON(url, body) {
+  const r = await fetch(url, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body || {}) });
+  return r.json();
+}
+
+async function loadSync() {
+  const d = await api('/api/sync/status');
+  const enabled = d.sync_enabled;
+  $('#syncEnabled').textContent = enabled ? '' : '未启用';
+  $('#syncDisabledTip').style.display = enabled ? 'none' : 'block';
+  $('#btnInit').disabled = true;
+  $('#btnUpdate').disabled = true;
+  $('#btnBackfill').disabled = true;
+  $('#chkAuto').disabled = true;
+  if (!enabled) { $('#syncNotes').innerHTML = syncNotesHTML(); stopSyncPoll(); return; }
+  const st = d.status || {};
+  $('#chkAuto').checked = !!st.auto;
+  $('#chkAuto').disabled = false;
+  // 初始化按钮：仅当库中无数据
+  $('#btnInit').disabled = st.has_data || st.running;
+  $('#btnUpdate').disabled = !!st.running;
+  $('#btnBackfill').disabled = !!st.running;
+  // 覆盖水位
+  renderWatermarks(st);
+  // 当前任务/进度
+  renderProgress(st);
+  // 历史
+  const jobs = await api('/api/sync/jobs?limit=20');
+  renderJobs(jobs.jobs || []);
+  $('#syncNotes').innerHTML = syncNotesHTML();
+  // 若正在跑，开启轮询
+  if (st.running) startSyncPoll(); else stopSyncPoll();
+}
+
+function startSyncPoll() {
+  if (syncTimer) return;
+  syncTimer = setInterval(async () => {
+    if (document.querySelector('.tab.active').dataset.tab !== 'sync') { stopSyncPoll(); return; }
+    const d = await api('/api/sync/status');
+    const st = d.status || {};
+    renderProgress(st);
+    $('#btnInit').disabled = st.has_data || st.running;
+    $('#btnUpdate').disabled = !!st.running;
+    $('#btnBackfill').disabled = !!st.running;
+    if (!st.running) { stopSyncPoll(); loadSync(); }
+  }, 1500);
+}
+function stopSyncPoll(){ if (syncTimer){ clearInterval(syncTimer); syncTimer = null; } }
+
+function renderWatermarks(st) {
+  const wm = st.watermarks || {}, rg = st.ranges || {};
+  const emails = Object.keys(rg);
+  if (!emails.length) { $('#wmList').textContent = '无账号'; return; }
+  let h = '';
+  emails.forEach(e => {
+    const u = (wm[e]||{}).usage, l = (wm[e]||{}).ledger;
+    const ur = (rg[e]||{}).usage || {}, lr = (rg[e]||{}).ledger || {};
+    const line = (label, r, w) =>
+      label + ': ' + ((r.count||0) > 0
+        ? fmt.int(r.count) + ' 条 · ' + fmt.time(r.min) + ' ~ ' + fmt.time(r.max)
+        : '<span class="dim">无数据</span>') +
+      ' · 水位 ' + (w ? fmt.time(w) : '<span class="dim">—</span>');
+    h += '<div style="margin-bottom:10px"><b>' + e + '</b><br>' +
+      line('usage', ur, u) + '<br>' + line('ledger', lr, l) + '</div>';
+  });
+  $('#wmList').innerHTML = h;
+}
+
+function renderProgress(st) {
+  const p = st.current;
+  const panel = $('#syncProgressPanel');
+  // 没有正在跑的任务时，仍展示最近一次任务的进度快照
+  const src = p || (st.latest_job && st.latest_job.progress_json ? JSON.parse(st.latest_job.progress_json) : null);
+  if (!src) { panel.style.display = 'none'; return; }
+  panel.style.display = 'block';
+  const status = src.status || 'running';
+  const jel = $('#jobStatus');
+  jel.textContent = status;
+  jel.className = 'tag ' + status;
+  const pct = src.total_est_pages ? Math.min(100, src.fetched_pages / src.total_est_pages * 100) : 0;
+  $('#progressFill').style.width = pct.toFixed(1) + '%';
+  let txt = '块 ' + (src.done_chunks||0) + '/' + (src.total_chunks||0) +
+    ' · 页 ' + (src.fetched_pages||0) + '/' + (src.total_est_pages||0) +
+    ' · 条 ' + fmt.int(src.fetched_items||0) +
+    (src.skipped ? ' · 跳过 ' + src.skipped + ' 块(已覆盖)' : '');
+  if (status === 'running' && src.cur_kind) {
+    txt += '<br>正在同步：' + (src.cur_email||'') + ' [' + kindLabel(src.cur_kind) + '] ' + (src.cur_range||'') +
+      ' · 第 ' + (src.cur_page||0) + '/' + (src.cur_est_pages||'?') + ' 页';
+  }
+  if (status === 'running' && src.overall_eta) {
+    txt += '<br>预计本项完成 ' + fmt.time(src.cur_chunk_eta) + ' · 预计整体完成 ' + fmt.time(src.overall_eta);
+  }
+  if (src.error) txt += '<br><span class="neg">错误: ' + src.error + '</span>';
+  if (src.finished_at) txt += '<br>完成于 ' + fmt.time(src.finished_at);
+  $('#progressText').innerHTML = txt;
+  // chunk 表
+  const latest = st.latest_job;
+  if (latest && latest.plan_json) {
+    try {
+      const plan = JSON.parse(latest.plan_json);
+      const tb = $('#chunkTable tbody'); tb.innerHTML = '';
+      (plan.chunks || []).forEach(c => {
+        const tr = document.createElement('tr');
+        const st2 = c.done ? (c.err === 'skipped:covered' ? 'skipped' : 'done') :
+          (status==='running' && src.cur_email===c.email && src.cur_kind===c.kind ? 'running' : 'pending');
+        if (st2==='skipped') tr.className='chunk-skipped';
+        const rng = c.kind==='snapshots' ? '当前快照' : fmt.time(c.start).slice(5) + ' ~ ' + fmt.time(c.end).slice(5);
+        tr.append(td(c.email), td(kindLabel(c.kind)), td(rng),
+          tn(c.est_pages, fmt.int), tn(c.pages||0, fmt.int), tn(c.items||0, fmt.int),
+          td('<span class="tag '+st2+'">'+st2+'</span>'));
+        tb.appendChild(tr);
+      });
+    } catch(e){}
+  }
+}
+
+function kindLabel(k){ return {usage:'使用明细',ledger:'余额流水',snapshots:'汇总快照'}[k] || k; }
+
+function renderJobs(jobs) {
+  const tb = $('#jobTable tbody'); tb.innerHTML = '';
+  if (!jobs.length) { tb.innerHTML = '<tr><td colspan="7" class="dim">暂无任务</td></tr>'; return; }
+  jobs.forEach(j => {
+    let items = '—';
+    try { const p = JSON.parse(j.progress_json||'{}'); items = fmt.int(p.fetched_items||0); } catch(e){}
+    const tr = document.createElement('tr');
+    tr.append(td('#'+j.id), td(j.trigger_kind), td('<span class="tag '+j.status+'">'+j.status+'</span>'),
+      td(j.started_at?fmt.time(j.started_at):'—'), td(j.finished_at?fmt.time(j.finished_at):'—'),
+      td(items), td(j.error?'<span class="neg" style="font-size:11px">'+j.error.slice(0,60)+'</span>':'—'));
+    tb.appendChild(tr);
+  });
+}
+
+$('#btnInit').addEventListener('click', async () => {
+  $('#btnInit').disabled = true;
+  const r = await postJSON('/api/sync/init');
+  if (r.reason) alert(r.reason);
+  loadSync(); startSyncPoll();
+});
+$('#btnUpdate').addEventListener('click', async () => {
+  $('#btnUpdate').disabled = true;
+  await postJSON('/api/sync/update');
+  loadSync(); startSyncPoll();
+});
+$('#btnBackfill').addEventListener('click', async () => {
+  $('#btnBackfill').disabled = true;
+  await postJSON('/api/sync/backfill');
+  loadSync(); startSyncPoll();
+});
+$('#chkAuto').addEventListener('change', async () => {
+  const r = await postJSON('/api/sync/auto', { on: $('#chkAuto').checked });
+  $('#chkAuto').checked = !!r.auto;
+});
+
+function syncNotesHTML() {
+  return '<ul>' +
+    '<li><b>更新 vs 回填</b>："更新数据"只做增量（从覆盖点到前一分钟）；"回填最近30天"是单独大任务，适合首次拉历史或补大段缺失。</li>' +
+    '<li><b>获取方案</b>：同步前按"账号 × 数据类型 × 时间块"生成方案。使用明细按天切块、流水按周切块、汇总快照整段一次。</li>' +
+    '<li><b>跳过已覆盖</b>：水位记录每类数据已成功覆盖到的最大时间；完全落入水位的块直接跳过，不重复请求。</li>' +
+    '<li><b>断点续传</b>：每块成功后才推进水位；中途停止下次从未覆盖处继续（按 id upsert，幂等不重复）。</li>' +
+    '<li><b>更新截止</b>：手动/自动更新截止到按下时刻的前一分钟，避免拉到正在写入的当前分钟数据。</li>' +
+    '<li><b>平滑限速</b>：单并发 + 固定约 1.2s/请求间隔；30 天初始化约几十~几百请求，对上游压力小。</li>' +
+    '<li><b>安全</b>：同步 worker 是唯一持可写库和解密凭据的组件；全部分析接口仍走只读连接，机密不回显。</li>' +
+    '</ul>';
+}
+
+
+// ===== 数据版本自动刷新 =====
+// 同步任务一结算（done/failed），后端 data_version 即 +1。
+// 前端每 3s 轻量轮询该版本，发现变化就静默重载当前页数据 —— 用户无需手动刷新/切tab。
+let __lastDataVer = null;
+let __dataVerTimer = null;
+
+async function pollDataVersion() {
+  try {
+    const d = await api('/api/sync/status');
+    if (!d.sync_enabled) return;              // 未启用同步：无需轮询
+    const st = d.status || {};
+    const v = st.data_version || 0;
+    if (__lastDataVer === null) { __lastDataVer = v; return; } // 首次只记录基线
+    if (v !== __lastDataVer) {
+      __lastDataVer = v;
+      // 静默刷新当前页
+      const cur = document.querySelector('.tab.active');
+      if (cur) {
+        const t = cur.dataset.tab;
+        // sync 页本身由 startSyncPoll 管；其余页直接重载
+        if (t !== 'sync') load(t);
+        else loadSync();
+        flashNow('数据已更新 ' + new Date().toLocaleTimeString('zh-CN', {hour12:false}));
+      }
+    }
+  } catch (e) { /* 网络抖动忽略，下轮再试 */ }
+}
+
+// 在右上角时间旁短暂提示"数据已更新"（3s 后恢复，不额外触发刷新）
+function flashNow(text) {
+  const el = $('#now');
+  if (!el) return;
+  const old = el.textContent;
+  el.textContent = text;
+  el.style.color = '#3ecf8e';
+  setTimeout(() => { el.style.color = ''; el.textContent = old; }, 3000);
+}
+
+// 启动全局轮询（每3s，足够实时又不给本地服务压力）
+function startDataVerWatch() {
+  if (__dataVerTimer) return;
+  __dataVerTimer = setInterval(pollDataVersion, 3000);
+}
+startDataVerWatch();

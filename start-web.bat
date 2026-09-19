@@ -1,8 +1,9 @@
 @echo off
-rem 启动 AI Pixel 数据分析 Web 界面
-rem 双击本脚本即可；需与 ai-pixel-analysis.exe 同目录
+rem 启动 AI Pixel 数据分析 Web 界面（含数据同步功能）
+rem 双击本脚本即可；需与 ai-pixel-analysis.exe、.env 同目录
+rem -sync 会加载 .env 解密会话用于后台抓取；分析接口仍是只读。
 cd /d "%~dp0"
 echo Starting web UI on http://localhost:8080 ...
-echo (keep this window open; close it to stop the server)
-ai-pixel-analysis.exe web
+echo (sync enabled; keep this window open; close it to stop the server)
+ai-pixel-analysis.exe web -sync
 pause

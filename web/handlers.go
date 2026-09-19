@@ -48,6 +48,12 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) (any, er
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	yesterdayStart := todayStart.AddDate(0, 0, -1)
 	sevenDayAgo := todayStart.AddDate(0, 0, -7)
+	// 同环比分钟对齐：当前小时已过 N 分钟，则三个对比窗口都取各自小时的前 N 分钟，
+	// 保证"同口径"——拿 12 分钟数据去比完整 60 分钟没有意义。
+	elapsed := now.Sub(curHour)
+	curWinEnd := curHour.Add(elapsed)
+	prevWinEnd := prevHour.Add(elapsed)
+	ydayWinEnd := ydaySameHour.Add(elapsed)
 
 	emails, err := s.listEmails()
 	if err != nil {
@@ -79,9 +85,10 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) (any, er
 		totalUsage7d += row.Usage7d
 		s.db.QueryRow(`SELECT COALESCE(SUM(total_cost),0), COALESCE(SUM(actual_cost),0) FROM usage_logs WHERE email=?`, e).Scan(&row.TotalCost, &row.ActualCost)
 		s.db.QueryRow(`SELECT COALESCE(SUM(CAST(amount AS REAL)),0) FROM balance_ledger WHERE email=? AND direction='credit' AND reason='account_share_income'`, e).Scan(&row.ShareIncome)
-		row.CurHourIncome = s.incomeBetween(e, curHour, curHour.Add(time.Hour))
-		row.PrevHourIncome = s.incomeBetween(e, prevHour, curHour)
-		row.YdaySameHourInc = s.incomeBetween(e, ydaySameHour, ydaySameHour.Add(time.Hour))
+		// 分钟对齐窗口：当前小时前N分钟 / 上一小时前N分钟 / 昨天同小时前N分钟
+		row.CurHourIncome = s.incomeBetween(e, curHour, curWinEnd)
+		row.PrevHourIncome = s.incomeBetween(e, prevHour, prevWinEnd)
+		row.YdaySameHourInc = s.incomeBetween(e, ydaySameHour, ydayWinEnd)
 		row.HourQoq = pct(row.CurHourIncome, row.PrevHourIncome)
 		row.HourYoy = pct(row.CurHourIncome, row.YdaySameHourInc)
 		row.TodayIncome = s.incomeBetween(e, todayStart, now)
@@ -108,12 +115,13 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) (any, er
 		}
 	}
 	return map[string]any{
-		"now":            now.Format(time.RFC3339),
-		"cur_hour":       fmtHour(curHour),
-		"prev_hour":      fmtHour(prevHour),
-		"yday_same_hour": fmtHour(ydaySameHour),
-		"total_usage_7d": totalUsage7d,
-		"rows":           out,
+		"now":             now.Format(time.RFC3339),
+		"cur_hour":        fmtHour(curHour),
+		"prev_hour":       fmtHour(prevHour),
+		"yday_same_hour":  fmtHour(ydaySameHour),
+		"elapsed_minutes": int(elapsed.Minutes()),
+		"total_usage_7d":  totalUsage7d,
+		"rows":            out,
 	}, nil
 }
 

@@ -8,12 +8,20 @@ import (
 	"time"
 )
 
-// Server 提供只读数据分析 API 与静态前端
+// Server 提供只读数据分析 API 与静态前端。
+// db 始终是只读连接；sync（可选）是独立工作器，持有自己的可写连接与凭据。
 type Server struct {
-	db *sql.DB
+	db   *sql.DB
+	sync *SyncWorker
 }
 
 func NewServer(db *sql.DB) *Server { return &Server{db: db} }
+
+// NewServerWithSync 在只读分析之外启用同步工作器。
+// sync 功能需要可写 store + host + db_secret（解密 session token）。
+func NewServerWithSync(db *sql.DB, sw *SyncWorker) *Server {
+	return &Server{db: db, sync: sw}
+}
 
 // Listen 注册路由并启动 HTTP 服务
 func (s *Server) Listen(addr string) error {
@@ -31,6 +39,13 @@ func (s *Server) Listen(addr string) error {
 	mux.HandleFunc("/api/ledger", s.wrap(s.handleLedger))
 	mux.HandleFunc("/api/balance-trend", s.wrap(s.handleBalanceTrend))
 	mux.HandleFunc("/api/emails", s.wrap(s.handleEmails))
+	// 同步（进度4）
+	mux.HandleFunc("/api/sync/init", s.wrap(s.handleSyncInit))
+	mux.HandleFunc("/api/sync/update", s.wrap(s.handleSyncUpdate))
+	mux.HandleFunc("/api/sync/backfill", s.wrap(s.handleSyncBackfill))
+	mux.HandleFunc("/api/sync/auto", s.wrap(s.handleSyncAuto))
+	mux.HandleFunc("/api/sync/status", s.wrap(s.handleSyncStatus))
+	mux.HandleFunc("/api/sync/jobs", s.wrap(s.handleSyncJobs))
 	log.Printf("web UI: http://localhost%s", addr)
 	return http.ListenAndServe(addr, mux)
 }

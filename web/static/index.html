@@ -20,6 +20,7 @@
     <button class="tab" data-tab="income">分账收入</button>
     <button class="tab" data-tab="usage">用量分析</button>
     <button class="tab" data-tab="ledger">流水明细</button>
+    <button class="tab" data-tab="sync">数据同步</button>
   </nav>
 </header>
 
@@ -32,12 +33,12 @@
       <div class="scroll"><table id="overviewTable">
         <thead><tr>
           <th>账号</th><th>7D请求</th><th>7D占比</th><th>账户计费</th><th>用户扣费</th>
-          <th>分账收入</th><th>当前小时</th><th>上一小时</th><th>小时环比</th><th>小时同比</th>
+          <th>分账收入</th><th>当前小时*</th><th>上一小时*</th><th>小时环比</th><th>小时同比</th>
           <th>今日收入</th><th>今日时均</th><th>日环比</th><th>余额</th>
         </tr></thead>
         <tbody></tbody>
       </table></div>
-      <p class="hint">小时环比 = 当前小时 vs 上一小时；小时同比 = 当前小时 vs 昨天同一小时；日环比 = 今日 vs 昨日。分母为 0 显示 —。当前小时为进行中数据。</p>
+      <p class="hint">小时同环比按<b>分钟对齐</b>：当前小时已过 N 分钟，则对比"上一小时前 N 分钟"与"昨天同小时前 N 分钟"（同口径，不拿整小时比零头）。日环比 = 今日 vs 昨日。分母为 0 显示 —。</p>
     </div>
     <div class="panel">
       <h2>分析口径与维度说明</h2>
@@ -97,6 +98,54 @@
         <th>时间</th><th>账号</th><th>方向</th><th>原因</th><th>金额</th><th>余额</th><th>使用者</th><th>Key</th><th>账户</th><th>请求ID</th>
       </tr></thead><tbody></tbody></table></div>
       <div class="pager"><button id="pgPrev">上一页</button><span id="pgInfo"></span><button id="pgNext">下一页</button></div>
+    </div>
+  </section>
+
+  <section id="tab-sync" class="page">
+    <div class="panel">
+      <div class="panel-head"><h2>数据同步</h2><span id="syncEnabled" class="dim"></span></div>
+      <p class="hint">
+        "更新数据"只从最新覆盖点增量同步到按下前一分钟（不补历史）；"回填最近30天"是单独的大任务，会重新拉取近30天。
+        同步按"获取方案"自动切块并跳过已覆盖的数据；每次请求间隔约 1.2s 平滑限速，不打爆上游。
+      </p>
+      <div class="sync-actions">
+        <button id="btnInit" class="btn">初始化数据（最近3天）</button>
+        <button id="btnUpdate" class="btn primary">更新数据</button>
+        <button id="btnBackfill" class="btn">回填最近30天</button>
+        <label class="chk"><input type="checkbox" id="chkAuto"> 每分钟自动同步</label>
+      </div>
+      <div id="syncDisabledTip" class="dim" style="display:none;margin-top:8px">
+        同步未启用：请用 <code>ai-pixel-analysis web -sync</code> 启动（需要 .env 解密会话凭据）。
+      </div>
+    </div>
+
+    <div class="panel" id="syncProgressPanel" style="display:none">
+      <h2>当前任务 <span id="jobStatus" class="tag"></span></h2>
+      <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
+      <div id="progressText" class="dim" style="margin:8px 0"></div>
+      <div class="scroll"><table id="chunkTable">
+        <thead><tr><th>账号</th><th>类型</th><th>时间范围</th><th>预估页</th><th>已拉页</th><th>条数</th><th>状态</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </div>
+
+    <div class="grid two">
+      <div class="panel">
+        <h2>数据覆盖（水位）</h2>
+        <div id="wmList" class="dim">—</div>
+      </div>
+      <div class="panel">
+        <h2>历史任务</h2>
+        <div class="scroll"><table id="jobTable">
+          <thead><tr><th>#</th><th>触发</th><th>状态</th><th>开始</th><th>结束</th><th>抓取条数</th><th>错误</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>关于增量方案</h2>
+      <div id="syncNotes"></div>
     </div>
   </section>
 
