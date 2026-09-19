@@ -122,6 +122,24 @@ CREATE TABLE IF NOT EXISTS sync_jobs (
     finished_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_sync_jobs_id ON sync_jobs(id DESC);
+
+-- 托管账号额度窗口快照：/accounts/{id}/usage 的 five_hour/seven_day 窗口。
+-- 每次同步快照覆盖写（保留最新一份）；7D 消耗=seven_day.window_stats.cost，利用率=utilization(%)。
+CREATE TABLE IF NOT EXISTS account_windows (
+    account_id INTEGER NOT NULL,
+    email TEXT NOT NULL,            -- 归属登录账号（号主 email）
+    name TEXT,                      -- 托管账号名称
+    platform TEXT,
+    five_hour_json TEXT,
+    seven_day_json TEXT,
+    sd_utilization REAL,            -- seven_day.utilization (%)
+    sd_cost REAL,                   -- seven_day.window_stats.cost 账号成本
+    sd_user_cost REAL,              -- seven_day.window_stats.user_cost 用户扣费口径
+    sd_requests INTEGER,
+    fetched_at INTEGER NOT NULL,
+    PRIMARY KEY (account_id, email)
+);
+CREATE INDEX IF NOT EXISTS idx_account_windows_email ON account_windows(email);
 `)
 	return err
 }
@@ -261,4 +279,45 @@ func OpenReadonly(dbPath string) (*sql.DB, error) {
 		return nil, err
 	}
 	return db, nil
+}
+
+// AccountWindow 是一条账号额度窗快照（从 /accounts/{id}/usage 解析）
+type AccountWindow struct {
+	AccountID     int64   `json:"account_id"`
+	Email         string  `json:"email"`
+	Name          string  `json:"name"`
+	Platform      string  `json:"platform"`
+	FiveHourJSON  string  `json:"five_hour_json"`
+	SevenDayJSON  string  `json:"seven_day_json"`
+	SDUtilization float64 `json:"sd_utilization"`
+	SDCost        float64 `json:"sd_cost"`
+	SDUserCost    float64 `json:"sd_user_cost"`
+	SDRequests    int64   `json:"sd_requests"`
+	FetchedAt     int64   `json:"fetched_at"`
+}
+
+// SaveAccountWindow 覆盖写某账号最新额度窗快照
+func (s *Store) SaveAccountWindow(w *AccountWindow) error {
+	_, err := s.db.Exec(`
+INSERT INTO account_windows (account_id, email, name, platform, five_hour_json, seven_day_json, sd_utilization, sd_cost, sd_user_cost, sd_requests, fetched_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?)
+ON CONFLICT(account_id, email) DO UPDATE SET
+    name=excluded.name,
+    platform=excluded.platform,
+    five_hour_json=excluded.five_hour_json,
+    seven_day_json=excluded.seven_day_json,
+    sd_utilization=excluded.sd_utilization,
+    sd_cost=excluded.sd_cost,
+    sd_user_cost=excluded.sd_user_cost,
+    sd_requests=excluded.sd_requests,
+    fetched_at=excluded.fetched_at`,
+		w.AccountID, w.Email, w.Name, w.Platform, w.FiveHourJSON, w.SevenDayJSON,
+		w.SDUtilization, w.SDCost, w.SDUserCost, w.SDRequests, w.FetchedAt)
+	return err
+}
+
+// ClearAccountWindows 清空某登录账号下全部托管账号快照
+func (s *Store) ClearAccountWindows(email string) error {
+	_, err := s.db.Exec(`DELETE FROM account_windows WHERE email=?`, email)
+	return err
 }

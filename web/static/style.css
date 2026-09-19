@@ -96,3 +96,10 @@ footer{color:var(--dim);font-size:12px;padding:20px;border-top:1px solid var(--l
 .safe-card h2{font-size:19px;margin-bottom:12px}
 .safe-card p{font-size:13px;color:var(--txt);margin-bottom:10px}
 .safe-card p.dim{color:var(--dim);font-size:12px;margin-bottom:0}
+
+
+/* 历史任务：默认显示约10条高度，超出滚动查看更早期记录 */
+.job-scroll { max-height: 380px; overflow-y: auto; }
+
+/* 登录失效常驻提醒 */
+#alBanner { font-size: 12px; }

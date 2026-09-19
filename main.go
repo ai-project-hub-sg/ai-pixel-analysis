@@ -251,11 +251,13 @@ func runWeb(dbPath, addr, envPath string, enableSync bool, intervalMs int) {
 		}
 		defer wstore.Close()
 		sw := web.NewSyncWorker(&web.SyncDeps{
-			Host:     cfg.Host,
-			Store:    wstore,
-			ReadDB:   db,
-			RawDir:   "data/raw",
-			Interval: time.Duration(intervalMs) * time.Millisecond,
+			Host:      cfg.Host,
+			LoginPort: cfg.LoginPort,
+			Users:     cfg.Users,
+			Store:     wstore,
+			ReadDB:    db,
+			RawDir:    "data/raw",
+			Interval:  time.Duration(intervalMs) * time.Millisecond,
 		})
 		defer sw.Close()
 		srv = web.NewServerWithSync(db, sw)

@@ -33,6 +33,9 @@ go.work.sum
 
 # SQLite database
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
 
 # Windows system cache (literal %SystemDrive% dir created by unexpanded env var)
 %SystemDrive%/

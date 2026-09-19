@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/url"
 )
 
@@ -68,4 +69,27 @@ func (c *Client) GetDashboardModels(params url.Values) (*DashboardModels, RawRes
 	var out DashboardModels
 	raw, err := c.get("/usage/dashboard/models", params, &out)
 	return &out, RawResult{Body: raw}, err
+}
+
+// ListAccounts 拉取号主名下托管账号列表
+func (c *Client) ListAccounts(page, pageSize int) (*AccountList, RawResult, error) {
+	v := url.Values{}
+	v.Set("page", fmt.Sprint(page))
+	v.Set("page_size", fmt.Sprint(pageSize))
+	var out AccountList
+	raw, err := c.get("/accounts", v, &out)
+	return &out, RawResult{Body: raw}, err
+}
+
+// GetAccountUsage 拉取单个托管账号的额度窗（five_hour/seven_day）
+func (c *Client) GetAccountUsage(accountID int64) (*AccountUsage, RawResult, error) {
+	var out AccountUsage
+	raw, err := c.get(fmt.Sprintf("/accounts/%d/usage", accountID), nil, &out)
+	return &out, RawResult{Body: raw}, err
+}
+
+// CheckAuth 用 auth/me 轻量验证当前 token 是否仍有效（用于登录态检测）
+func (c *Client) CheckAuth() error {
+	_, err := c.get("/auth/me", nil, nil)
+	return err
 }

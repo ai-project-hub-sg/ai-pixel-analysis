@@ -122,7 +122,7 @@ async function loadOverview() {
   const sum = f => r.reduce((a, x) => a + (x[f] || 0), 0);
   cards($('#overviewCards'), [
     { label: '账号数', value: r.length, sub: '已登录会话' },
-    { label: '7D 总请求', value: fmt.int(d.total_usage_7d), sub: '全部账号' },
+    { label: '7D 总消耗', value: fmt.money(d.total_cost_7d), sub: '利用率 ' + fmt.pct(d.usage_pct_7d) },
     { label: '分账收入合计', value: fmt.money(sum('share_income')), sub: 'account_share_income' },
     { label: '当前小时收入', value: fmt.money(sum('cur_hour_income')), sub: d.cur_hour },
     { label: '今日收入', value: fmt.money(sum('today_income')), sub: '昨日 ' + fmt.money(sum('yesterday_income')) },
@@ -132,7 +132,7 @@ async function loadOverview() {
   r.forEach(x => {
     const tr = document.createElement('tr');
     tr.append(td(x.email),
-      tn(x.usage_7d, fmt.int), tn(x.usage_pct_7d, fmt.pct),
+      tn(x.cost_7d), tn(x.utilization, fmt.pct),
       tn(x.total_cost), tn(x.actual_cost), tn(x.share_income),
       tn(x.cur_hour_income), tn(x.prev_hour_income),
       tn(x.hour_qoq, fmt.pct, cls(x.hour_qoq)),
@@ -144,11 +144,12 @@ async function loadOverview() {
   });
   $('#notes').innerHTML =
     '<h3>首页指标口径</h3><ul>' +
-    '<li><b>7D请求/占比</b>：近 7 个自然日 usage_logs 请求数及占全部账号比例，衡量各账号近期活跃度。</li>' +
+    '<li><b>7D消耗</b>：各账号下托管上游账号的 seven_day.window_stats.cost 加总（7天额度窗账号成本）。</li>' +
+    '<li><b>7D利用率</b>：Σ7D消耗 / Σ7D额度。额度=每个账号 cost/utilization 反推后加总，体现7天额度已用占比。</li>' +
     '<li><b>账户计费</b>：total_cost，官方按定价计算的原始费用。</li>' +
     '<li><b>用户扣费</b>：actual_cost，乘 rate_multiplier 后实际从用户扣的金额（平台营收基准）。</li>' +
     '<li><b>分账收入</b>：balance_ledger 中 direction=credit 且 reason=account_share_income 的入账，即号主分账收入。</li>' +
-    '<li><b>当前/上一小时收入</b>：分账收入按小时聚合。环比=当前小时/上一小时−1；同比=当前小时/昨天同一小时−1。</li>' +
+    '<li><b>当前/上一小时收入</b>：分账收入按小时聚合；上一小时/昨日同小时显示完整1小时。环比/同比率按分钟对齐（当前小时已过N分钟，对比上小时/昨同小时前N分钟）。</li>' +
     '<li><b>今日时均</b>：今日累计分账收入 ÷ 今日已过去小时数，用于预估全天收入水平。</li>' +
     '</ul><h3>推荐分析维度及理由</h3><ul>' +
     '<li><b>分账收入趋势（时/天）</b>：核心业务指标，识别高峰时段与增长/衰退拐点。</li>' +
@@ -163,6 +164,20 @@ async function loadOverview() {
     '<li><b>first_token_ms</b>：流式首 token 延迟，非流式为空、样本缺失多，聚合易失真。</li>' +
     '<li><b>inbound_endpoint / group_id</b>：当前取值维度单一，区分度不足。</li>' +
     '</ul>';
+  // 托管账号额度窗明细（7D 消耗/利用率来自 /accounts/{id}/usage 快照）
+  const acc = d.accounts || [];
+  if (acc.length) {
+    let ah = '<h3 style="margin-top:14px">托管账号 7D 额度窗</h3><div class="scroll"><table><thead><tr><th>账号ID</th><th>名称</th><th>平台</th><th>归属</th><th>7D消耗</th><th>7D用户扣费</th><th>利用率</th><th>7D请求</th><th>快照时间</th></tr></thead><tbody>';
+    acc.forEach(a => {
+      ah += '<tr><td>' + a.account_id + '</td><td>' + (a.name||'—') + '</td><td>' + (a.platform||'—') + '</td><td>' + a.email + '</td>' +
+        '<td class="num">' + fmt.money(a.cost_7d) + '</td><td class="num">' + fmt.money(a.user_cost_7d) + '</td>' +
+        '<td class="num">' + fmt.pct(a.utilization) + '</td><td class="num">' + fmt.int(a.requests_7d) + '</td>' +
+        '<td class="dim">' + (a.fetched_at ? new Date(a.fetched_at*1000).toLocaleString('zh-CN',{hour12:false}) : '—') + '</td></tr>';
+    });
+    ah += '</tbody></table></div>';
+    $('#notes').innerHTML = ah + $('#notes').innerHTML;
+  }
+
 }
 
 // ===== 分账收入 =====
@@ -213,7 +228,9 @@ async function loadUsage() {
     const tr = document.createElement('tr');
     tr.append(td(m.model), tn(m.requests, fmt.int), tn(m.input_tokens, fmt.int),
       tn(m.output_tokens, fmt.int), tn(m.cache_read_tokens, fmt.int),
-      tn(m.total_cost), tn(m.actual_cost), tn(m.avg_duration_ms, fmt.ms), tn(m.avg_rate_multiplier));
+      tn(m.total_cost), tn(m.actual_cost), tn(m.share_income),
+      tn(m.rate_multiplier, x => x == null ? '—' : Number(x).toFixed(4)),
+      tn(m.share_rate, fmt.pct), tn(m.avg_duration_ms, fmt.ms));
     tb.appendChild(tr);
   });
   const dist = d.dist || {};
@@ -254,10 +271,12 @@ $('#usageHourlyDay').addEventListener('change', async () => {
 // ===== 流水明细 =====
 let pgOffset = 0; const pgLimit = 100;
 async function loadLedger() {
-  const p = { email: email(), direction: $('#fDir').value, reason: $('#fReason').value, limit: pgLimit, offset: pgOffset };
+  const p = { email: email(), direction: $('#fDir').value, reason: $('#fReason').value, consumer: $('#fConsumer').value, api_key: $('#fKey').value, limit: pgLimit, offset: pgOffset };
   const d = await api('/api/ledger?' + qs(p));
   if (!$('#fReason').dataset.init) {
     (d.reasons || []).forEach(r => { const o = document.createElement('option'); o.value = r.k; o.textContent = r.k + ' (' + fmt.int(r.v) + ')'; $('#fReason').appendChild(o); });
+    (d.consumers || []).forEach(r => { const o = document.createElement('option'); o.value = r.k; o.textContent = r.k + ' (' + fmt.int(r.v) + ')'; $('#fConsumer').appendChild(o); });
+    (d.api_keys || []).forEach(r => { const o = document.createElement('option'); o.value = r.k; o.textContent = r.k + ' (' + fmt.int(r.v) + ')'; $('#fKey').appendChild(o); });
     $('#fReason').dataset.init = '1';
   }
   $('#ledgerTotal').textContent = '共 ' + fmt.int(d.total) + ' 条';
@@ -312,6 +331,7 @@ async function loadSync() {
   $('#chkAuto').disabled = true;
   if (!enabled) { $('#syncNotes').innerHTML = syncNotesHTML(); stopSyncPoll(); return; }
   const st = d.status || {};
+  authGate(st);
   $('#chkAuto').checked = !!st.auto;
   $('#chkAuto').disabled = false;
   // 初始化按钮：仅当库中无数据
@@ -323,7 +343,7 @@ async function loadSync() {
   // 当前任务/进度
   renderProgress(st);
   // 历史
-  const jobs = await api('/api/sync/jobs?limit=20');
+  const jobs = await api('/api/sync/jobs?limit=10');
   renderJobs(jobs.jobs || []);
   $('#syncNotes').innerHTML = syncNotesHTML();
   // 若正在跑，开启轮询
@@ -431,17 +451,20 @@ function renderJobs(jobs) {
 $('#btnInit').addEventListener('click', async () => {
   $('#btnInit').disabled = true;
   const r = await postJSON('/api/sync/init');
+  if (r && r.auth_required) { alShow(); $('#btnInit').disabled = false; return; }
   if (r.reason) alert(r.reason);
   loadSync(); startSyncPoll();
 });
 $('#btnUpdate').addEventListener('click', async () => {
   $('#btnUpdate').disabled = true;
-  await postJSON('/api/sync/update');
+  const r = await postJSON('/api/sync/update');
+  if (r && r.auth_required) { alShow(); $('#btnUpdate').disabled = false; return; }
   loadSync(); startSyncPoll();
 });
 $('#btnBackfill').addEventListener('click', async () => {
   $('#btnBackfill').disabled = true;
-  await postJSON('/api/sync/backfill');
+  const r = await postJSON('/api/sync/backfill');
+  if (r && r.auth_required) { alShow(); $('#btnBackfill').disabled = false; return; }
   loadSync(); startSyncPoll();
 });
 $('#chkAuto').addEventListener('change', async () => {
@@ -474,6 +497,7 @@ async function pollDataVersion() {
     cgMarkOnline();                            // 能连上 = 服务在线
     if (!d.sync_enabled) return;              // 未启用同步：无需轮询
     const st = d.status || {};
+    authGate(st);
     const v = st.data_version || 0;
     if (__lastDataVer === null) { __lastDataVer = v; return; } // 首次只记录基线
     if (v !== __lastDataVer) {
@@ -665,3 +689,48 @@ window.addEventListener('beforeunload', (e) => {
 // 首次轮询后就知道 sync_enabled（pollDataVersion 每3s也会刷新缓存）
 cgRefreshEnabled();
 setInterval(cgRefreshEnabled, 3000);
+
+
+// ===== 登录失效提醒 =====
+// 后端 status.auth_valid: 1=有效 0=失效 -1=未检测。
+// 失效时弹「登录失效」框：重新登录(POST /api/sync/relogin)或暂不。
+// 暂不则显示常驻提醒条；已同步数据仍可读（分析接口与登录态无关）。
+let __authDismissed = false;
+const alMask = () => document.getElementById('authLostMask');
+function alShow(){ if (__authDismissed) { alShowBanner(); return; } const m = alMask(); if (m) m.style.display='flex'; }
+function alHide(){ const m = alMask(); if (m) m.style.display='none'; }
+function alShowBanner(){
+  // 常驻提醒（不阻断阅读）：在 header now 旁
+  const el = $('#now');
+  if (el && !$('#alBanner')) {
+    const b = document.createElement('span');
+    b.id = 'alBanner'; b.style.cssText='color:#ff7a88;margin-left:10px;cursor:pointer';
+    b.textContent = '⚠ 登录已失效，数据不会更新（点击重新登录）';
+    b.addEventListener('click', () => { __authDismissed=false; alShow(); });
+    el.appendChild(b);
+  }
+}
+function alClearBanner(){ const b = $('#alBanner'); if (b) b.remove(); }
+
+// 依据 status 判断登录态并驱动提醒
+function authGate(st){
+  const v = st && st.auth_valid;
+  if (v === 0) { alShow(); return true; }   // 已确认失效
+  alHide(); alClearBanner(); __authDismissed=false;
+  return false;
+}
+// 绑定弹窗按钮
+(function(){
+  const rl = document.getElementById('alRelogin');
+  if (rl) rl.addEventListener('click', async () => {
+    rl.disabled = true; rl.textContent = '登录中…';
+    try {
+      const r = await postJSON('/api/sync/relogin');
+      if (r && r.ok) { alHide(); alClearBanner(); flashNow('已重新登录（'+ (r.success||0) +'/'+ (r.total||0) +'账号）'); loadSync(); }
+      else { alert('重新登录失败：' + ((r&&r.error)||'请检查账号/网络后可重试')); }
+    } catch(e){ alert('重新登录失败：' + e.message); }
+    rl.disabled = false; rl.textContent = '重新登录';
+  });
+  const dm = document.getElementById('alDismiss');
+  if (dm) dm.addEventListener('click', () => { __authDismissed=true; alHide(); alShowBanner(); });
+})();

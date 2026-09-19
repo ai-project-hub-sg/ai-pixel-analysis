@@ -73,6 +73,35 @@
 
 均返回汇总/数组快照，不分页。
 
+
+## 3.5 托管账号 `GET /accounts`（进度6 新增）
+
+| 参数 | 说明 |
+|---|---|
+| page / page_size | 分页 |
+
+返回号主名下托管上游账号列表，关键字段：`id`（额度窗 key）、`name`、`platform`、`account_level`、`status`。
+
+## 3.6 账号额度窗 `GET /accounts/{account_id}/usage`（进度6 新增）
+
+返回该托管账号的额度窗口（`five_hour` / `seven_day`）。
+
+```json
+{
+  "seven_day": {
+    "utilization": 53,
+    "window_stats": {
+      "requests": 11089,
+      "cost": 923.39,        // 7D 账号消耗（账号成本）
+      "standard_cost": 950.37,
+      "user_cost": 236.86    // 7D 用户扣费口径
+    }
+  }
+}
+```
+
+**用途**：总览「7D消耗」=`seven_day.window_stats.cost` 加总；「7D利用率」=Σcost/Σ额度（额度=cost/utilization 反推）。每次同步快照覆盖写入 `account_windows` 表。
+
 ## 4. 余额流水 `GET /usage/balance-ledger`
 
 | 参数 | 说明 |

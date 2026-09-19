@@ -32,13 +32,13 @@
       <h2>账号核心指标</h2>
       <div class="scroll"><table id="overviewTable">
         <thead><tr>
-          <th>账号</th><th>7D请求</th><th>7D占比</th><th>账户计费</th><th>用户扣费</th>
+          <th>账号</th><th>7D消耗</th><th>7D利用率</th><th>账户计费</th><th>用户扣费</th>
           <th>分账收入</th><th>当前小时*</th><th>上一小时*</th><th>小时环比</th><th>小时同比</th>
           <th>今日收入</th><th>今日时均</th><th>日环比</th><th>余额</th>
         </tr></thead>
         <tbody></tbody>
       </table></div>
-      <p class="hint">小时同环比按<b>分钟对齐</b>：当前小时已过 N 分钟，则对比"上一小时前 N 分钟"与"昨天同小时前 N 分钟"（同口径，不拿整小时比零头）。日环比 = 今日 vs 昨日。分母为 0 显示 —。</p>
+      <p class="hint">上一小时/昨日同小时显示<b>完整1小时</b>；仅小时同环比率按<b>分钟对齐</b>：当前小时已过 N 分钟，则对比"上一小时前 N 分钟"与"昨天同小时前 N 分钟"（同口径，不拿整小时比零头）。日环比 = 今日 vs 昨日。分母为 0 显示 —。</p>
     </div>
     <div class="panel">
       <h2>分析口径与维度说明</h2>
@@ -68,7 +68,7 @@
     <div class="grid cards" id="usageCards"></div>
     <div class="grid two">
       <div class="panel"><h2>按模型</h2><div class="scroll"><table id="byModelTable"><thead><tr>
-        <th>模型</th><th>请求</th><th>输入</th><th>输出</th><th>缓存读</th><th>计费</th><th>实扣</th><th>均耗时</th><th>均倍率</th>
+        <th>模型</th><th>请求</th><th>输入</th><th>输出</th><th>缓存读</th><th>账号成本</th><th>用户扣费</th><th>分账收入</th><th>倍率</th><th>分账率</th><th>均耗时</th>
       </tr></thead><tbody></tbody></table></div></div>
       <div class="panel"><h2>请求分布</h2><div id="reqDist"></div></div>
     </div>
@@ -91,6 +91,8 @@
       <div class="filters">
         <select id="fDir"><option value="">全部方向</option><option value="credit">credit 入账</option><option value="debit">debit 出账</option></select>
         <select id="fReason"><option value="">全部原因</option></select>
+        <select id="fConsumer"><option value="">全部使用者</option></select>
+        <select id="fKey"><option value="">全部Key</option></select>
         <button id="fGo">查询</button>
         <span id="ledgerTotal"></span>
       </div>
@@ -136,7 +138,7 @@
       </div>
       <div class="panel">
         <h2>历史任务</h2>
-        <div class="scroll"><table id="jobTable">
+        <div class="scroll job-scroll"><table id="jobTable">
           <thead><tr><th>#</th><th>触发</th><th>状态</th><th>开始</th><th>结束</th><th>抓取条数</th><th>错误</th></tr></thead>
           <tbody></tbody>
         </table></div>
@@ -164,6 +166,19 @@
       <button id="cgCancel" class="btn">取消</button>
     </div>
     <p class="cg-hint">勾选「不再提醒」后仍可随时改回：页面右上角「关闭设置」重新打开本框。保留服务后想停止：在「数据同步」页操作，或关闭启动它的命令行窗口。</p>
+  </div>
+</div>
+
+<!-- 登录失效弹窗 -->
+<div id="authLostMask" class="cg-mask" style="display:none">
+  <div class="cg-dialog">
+    <h3>登录已失效</h3>
+    <p class="cg-text">数据同步检测到登录状态已失效，无法更新数据。是否立即重新登录？</p>
+    <div class="cg-btns">
+      <button id="alRelogin" class="btn primary">重新登录</button>
+      <button id="alDismiss" class="btn">暂不</button>
+    </div>
+    <p class="cg-hint">拒绝重新登录后，已同步到本地的数据仍可正常查看，但不会继续更新；登录恢复后同步自动继续。</p>
   </div>
 </div>
 <script src="/static/app.js"></script>

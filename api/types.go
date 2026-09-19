@@ -170,3 +170,50 @@ type DashboardModels struct {
 	EndDate   string       `json:"end_date"`
 	Models    []ModelUsage `json:"models"`
 }
+
+// ---- /accounts 托管账号（号主名下的上游账号） ----
+
+// AccountItem 是 /accounts 列表项（取分析所需字段）
+type AccountItem struct {
+	ID           int64  `json:"id"`
+	Name         string `json:"name"`
+	Platform     string `json:"platform"`
+	AccountLevel string `json:"account_level"`
+	Status       string `json:"status"`
+}
+
+type AccountList struct {
+	Items []AccountItem `json:"items"`
+	Total int64         `json:"total"`
+	Page  int           `json:"page"`
+	Pages int           `json:"pages"`
+}
+
+// ---- /accounts/{id}/usage 额度窗口 ----
+
+// WindowStats 是窗口内用量统计
+type WindowStats struct {
+	Requests     int64   `json:"requests"`
+	Tokens       int64   `json:"tokens"`
+	Cost         float64 `json:"cost"` // 账号成本（7D 账号消耗）
+	StandardCost float64 `json:"standard_cost"`
+	UserCost     float64 `json:"user_cost"` // 用户扣费口径
+}
+
+// UsageWindow 是一个额度窗（five_hour 或 seven_day）
+type UsageWindow struct {
+	Utilization      float64      `json:"utilization"` // 已用百分比
+	ResetsAt         string       `json:"resets_at"`
+	WindowStart      string       `json:"window_start"`
+	StatsComplete    bool         `json:"stats_complete"`
+	RemainingSeconds float64      `json:"remaining_seconds"`
+	WindowStats      *WindowStats `json:"window_stats"`
+}
+
+// AccountUsage 是 /accounts/{id}/usage 的返回
+type AccountUsage struct {
+	Source    string       `json:"source"`
+	UpdatedAt string       `json:"updated_at"`
+	FiveHour  *UsageWindow `json:"five_hour"`
+	SevenDay  *UsageWindow `json:"seven_day"`
+}

@@ -9,6 +9,7 @@ package pipeline
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -51,6 +52,7 @@ const ledgerChunkDays = 7 // ledger 较小，按周切
 //   - manual/auto 传 0：只从覆盖右端增量更新到 cutoff（不补历史）。
 //   - init 传 3：拉最近3天。
 //   - backfill 传 30：拉最近30天（单独的大任务）。
+//
 // getRange(email,kind) 返回该账号该表已有数据范围；getWM 返回水位。
 func BuildPlan(trigger string, emails []string, backfillDays int, getRange func(email, kind string) store.DataRange, getWM func(email, kind string) (time.Time, error), now time.Time) (*SyncPlan, error) {
 	cutoff := now.Truncate(time.Minute).Add(-time.Second)
@@ -75,10 +77,10 @@ func (p *SyncPlan) addSeries(email, kind string, chunkDays, backfillDays int, cu
 		// init/backfill：无论水位如何都从 cutoff 往前 backfillDays 天开始（跳过逻辑负责去重）
 		start = cutoff.AddDate(0, 0, -(backfillDays - 1))
 		// 但若水位/已有数据更靠前，仍需从更早处补空洞 -> 取更早起点
-		if !wm.IsZero() && wm.AddDate(0,0,-1).Before(start) {
+		if !wm.IsZero() && wm.AddDate(0, 0, -1).Before(start) {
 			start = wm.AddDate(0, 0, -1)
 		}
-		if dr.Count > 0 && dr.Min != nil && dr.Min.AddDate(0,0,-1).Before(start) {
+		if dr.Count > 0 && dr.Min != nil && dr.Min.AddDate(0, 0, -1).Before(start) {
 			start = dr.Min.AddDate(0, 0, -1)
 		}
 	case !wm.IsZero():
@@ -197,6 +199,18 @@ func (sy *Syncer) Run(jobID int64, plan *SyncPlan) *Progress {
 			c.Err = err.Error()
 			if firstErr == nil {
 				firstErr = err
+			}
+			// 登录失效：立即中止整个任务——继续跑必然全部失败，没有意义。
+			// 标记 canceled 而非 failed 便于前端区分"数据问题"与"需要重新登录"。
+			if errors.Is(err, api.ErrUnauthorized) {
+				pg.Status = "failed"
+				pg.Error = "登录已失效，请重新登录后再同步"
+				pg.FinishedAt = time.Now()
+				c.Done = true
+				pg.DoneChunks++
+				sy.report(pg)
+				pg.CurEmail, pg.CurKind, pg.CurRange = "", "", ""
+				return pg
 			}
 		} else if c.Kind == "usage" || c.Kind == "ledger" {
 			// 只有时间序列数据才推进水位；snapshots 是即时快照，不参与覆盖

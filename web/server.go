@@ -60,6 +60,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("/api/sync/backfill", s.wrap(s.handleSyncBackfill))
 	mux.HandleFunc("/api/sync/auto", s.wrap(s.handleSyncAuto))
 	mux.HandleFunc("/api/sync/status", s.wrap(s.handleSyncStatus))
+	mux.HandleFunc("/api/sync/relogin", s.wrap(s.handleSyncRelogin))
 	mux.HandleFunc("/api/sync/jobs", s.wrap(s.handleSyncJobs))
 	// 生命周期：关闭行为 + 关闭服务（前端"关闭页面"弹窗）
 	mux.HandleFunc("/api/lifecycle/close-pref", s.wrap(s.handleClosePref))

@@ -2,12 +2,17 @@ package web
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ai-pixel-analysis/api"
+	"ai-pixel-analysis/auth"
+	"ai-pixel-analysis/config"
 	"ai-pixel-analysis/pipeline"
 	"ai-pixel-analysis/store"
 )
@@ -15,11 +20,13 @@ import (
 // SyncDeps 是同步所需的全部依赖。host 用于建 api client；store 用于读 session/写数据。
 // 注意：此 worker 是唯一持有可写 store + db_secret 的组件；分析 API 仍用只读连接。
 type SyncDeps struct {
-	Host     string
-	Store    *store.Store // 可写
-	ReadDB   *sql.DB      // 只读（与 Server 共享，用于查已有数据范围——用同一连接即可）
-	RawDir   string
-	Interval time.Duration
+	Host      string
+	LoginPort string        // 登录页路径，用于取 login_agreement_revision
+	Users     []config.User // .env 账号（供 Relogin；机密仅存内存）
+	Store     *store.Store  // 可写
+	ReadDB    *sql.DB       // 只读（与 Server 共享，用于查已有数据范围——用同一连接即可）
+	RawDir    string
+	Interval  time.Duration
 }
 
 // SyncWorker 串行执行同步任务，维护当前任务与自动同步开关。
@@ -33,6 +40,7 @@ type SyncWorker struct {
 	lastJobID int64
 	dataVer   int64     // 数据版本号：每次同步结束递增，前端据此自动刷新
 	closeOnce sync.Once // Close 幂等：shutdown goroutine 与 runWeb defer 都可能调
+	authValid int32     // 1=登录有效 0=失效/未知 -1=未检测（atomic）
 }
 
 func NewSyncWorker(d *SyncDeps) *SyncWorker {
@@ -46,6 +54,9 @@ func NewSyncWorker(d *SyncDeps) *SyncWorker {
 		w.auto = true
 	}
 	go w.loop()
+	// 启动即后台校验一次登录态：前端可尽快提示"登录已失效"，
+	// 同时让 auto loop 的 authValid 门控立即生效（失效即暂停自动同步）。
+	go w.CheckAuth()
 	return w
 }
 
@@ -69,7 +80,13 @@ func (w *SyncWorker) StartJob(trigger string) (int64, bool, error) {
 	}
 	emails, err := w.deps.Store.ListSessions()
 	if err != nil || len(emails) == 0 {
-		return 0, false, fmt.Errorf("no logged-in sessions; run login first")
+		w.setAuthValid(0)
+		return 0, false, ErrNoSession
+	}
+	// 手动触发时若已知失登录，直接返回 ErrNoSession（前端弹重新登录），
+	// 避免起任务后第一块必失败才提示。auto 任务由 loop 的 authValid 门控已拦。
+	if trigger != "auto" && w.AuthValid() == 0 {
+		return 0, false, ErrNoSession
 	}
 	now := time.Now()
 	// 触发类型决定回补天数：init=3天, backfill=30天, manual/auto=0(纯增量)
@@ -136,6 +153,9 @@ func (w *SyncWorker) execute(jobID int64, plan *pipeline.SyncPlan) {
 	}
 	_ = w.deps.Store.UpdateSyncJob(jobID, "running", nil, "")
 	pg := sy.Run(jobID, plan)
+	if pg.Error != "" && strings.Contains(pg.Error, "登录已失效") {
+		w.setAuthValid(0)
+	}
 	final := "done"
 	if pg.Status == "failed" {
 		final = "failed"
@@ -155,13 +175,31 @@ func (w *SyncWorker) loop() {
 		select {
 		case <-w.stopCh:
 			return
+		case <-w.wake:
+			// 外部信号（如重新登录成功）触发一次立即同步
+			w.mu.Lock()
+			auto := w.auto
+			running := w.cur != nil && w.cur.Status == "running"
+			w.mu.Unlock()
+			if auto && !running && w.AuthValid() != 0 {
+				if _, _, err := w.StartJob("auto"); err != nil {
+					log.Printf("wake sync: %v", err)
+				}
+			}
 		case <-t.C:
 			w.mu.Lock()
 			auto := w.auto
 			running := w.cur != nil && w.cur.Status == "running"
 			w.mu.Unlock()
 			if auto && !running {
-				if _, _, err := w.StartJob("auto"); err != nil {
+				// 失登录时暂停自动同步：已知失效就不再每分钟必失败地重试，
+				// 直到某次 StartJob/手动操作重新检测到有效登录（authValid 复位）。
+				if w.AuthValid() == 0 {
+					log.Printf("auto sync paused: login invalid, waiting re-login")
+				} else if _, _, err := w.StartJob("auto"); err != nil {
+					if errors.Is(err, ErrNoSession) {
+						w.setAuthValid(0)
+					}
 					log.Printf("auto sync: %v", err)
 				}
 			}
@@ -193,6 +231,7 @@ type SyncStatus struct {
 	Auto       bool                                  `json:"auto"`
 	Running    bool                                  `json:"running"`
 	DataVer    int64                                 `json:"data_version"`
+	AuthValid  int32                                 `json:"auth_valid"` // 1=有效 0=失效 -1=未知
 	Current    *pipeline.Progress                    `json:"current,omitempty"`
 	LatestJob  *store.SyncJobRow                     `json:"latest_job,omitempty"`
 	Watermarks map[string]map[string]time.Time       `json:"watermarks"`
@@ -200,7 +239,7 @@ type SyncStatus struct {
 }
 
 func (w *SyncWorker) Status() (*SyncStatus, error) {
-	st := &SyncStatus{Auto: w.Auto()}
+	st := &SyncStatus{Auto: w.Auto(), AuthValid: w.AuthValid()}
 	if has, err := w.deps.Store.HasAnyData(); err == nil {
 		st.HasData = has
 	}
@@ -235,3 +274,79 @@ func (w *SyncWorker) Close() { w.closeOnce.Do(func() { close(w.stopCh) }) }
 // GetLatestJob 代理到 store（Server 调用）。
 func (w *SyncWorker) GetLatestJob() (*store.SyncJobRow, error)   { return w.deps.Store.GetLatestJob() }
 func (w *SyncWorker) ListJobs(n int) ([]store.SyncJobRow, error) { return w.deps.Store.ListSyncJobs(n) }
+
+// ErrNoSession 表示没有任何已登录会话（auth_sessions 为空）。
+var ErrNoSession = errors.New("no logged-in sessions; run login first")
+
+// CheckAuth 检测当前保存的会话是否仍有效（对第一个账号做轻量 auth/me 校验）。
+// 返回 true=有效 false=失效/无会话。结果缓存到 authValid 供 Status 与 auto loop 使用。
+func (w *SyncWorker) CheckAuth() bool {
+	emails, err := w.deps.Store.ListSessions()
+	if err != nil || len(emails) == 0 {
+		w.setAuthValid(0)
+		return false
+	}
+	sess, err := w.deps.Store.GetSession(emails[0])
+	if err != nil {
+		w.setAuthValid(0)
+		return false
+	}
+	cli, err := api.NewClient(w.deps.Host, sess.TokenType, sess.AccessToken)
+	if err != nil {
+		w.setAuthValid(0)
+		return false
+	}
+	if err := cli.CheckAuth(); err != nil {
+		w.setAuthValid(0)
+		return false
+	}
+	w.setAuthValid(1)
+	return true
+}
+
+func (w *SyncWorker) setAuthValid(v int32) { atomic.StoreInt32(&w.authValid, v) }
+func (w *SyncWorker) AuthValid() int32     { return atomic.LoadInt32(&w.authValid) }
+
+// Relogin 用 .env 中的账号重新登录并把新凭据加密入库。
+// 全程不返回任何机密；仅返回每账号成功与否。成功后复位 authValid 并唤醒一次同步。
+func (w *SyncWorker) Relogin() (map[string]any, error) {
+	if len(w.deps.Users) == 0 {
+		return map[string]any{"ok": false, "error": "无可用账号（.env 未加载 user_*）"}, nil
+	}
+	client, err := auth.NewClient(w.deps.Host)
+	if err != nil {
+		return nil, err
+	}
+	revision, err := client.FetchAgreementRevision(w.deps.LoginPort)
+	if err != nil {
+		return nil, fmt.Errorf("fetch agreement revision: %w", err)
+	}
+	okCount := 0
+	var fails []string
+	for _, u := range w.deps.Users {
+		res, err := client.Login(u.Name, u.Password, revision)
+		if err != nil {
+			fails = append(fails, u.Name)
+			continue
+		}
+		ar := store.FromLoginResult(res.AccessToken, res.RefreshToken, res.TokenType, res.ExpiresIn, res.Cookies, res.User)
+		if err := w.deps.Store.SaveSession(u.Name, ar); err != nil {
+			fails = append(fails, u.Name)
+			continue
+		}
+		okCount++
+	}
+	if okCount > 0 {
+		w.setAuthValid(1)
+		// 复位失败标记：让 auto loop 恢复、并唤醒一次增量同步
+		if w.auto {
+			w.signal()
+		}
+	}
+	return map[string]any{
+		"ok":      okCount > 0,
+		"total":   len(w.deps.Users),
+		"success": okCount,
+		"failed":  fails,
+	}, nil
+}

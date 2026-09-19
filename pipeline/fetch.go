@@ -5,6 +5,10 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"time"
+
+	"ai-pixel-analysis/api"
+	"ai-pixel-analysis/store"
 )
 
 // fetchAll 分页拉满一类接口，把每页原始响应和清洗后的条目都交给回调
@@ -139,7 +143,59 @@ func (f *Fetcher) FetchSnapshots(o Options, res *Result) error {
 			res.RawFiles = append(res.RawFiles, p)
 		}
 	}
+	f.fetchAccountWindows(o, res)
 	return nil
+}
+
+// fetchAccountWindows 拉取号主名下全部托管账号的额度窗（/accounts + /accounts/{id}/usage），
+// 覆盖写进 account_windows 表，并落盘原始响应。供总览 7D 消耗/占比使用。
+func (f *Fetcher) fetchAccountWindows(o Options, res *Result) {
+	// 1) 列账号（分页拉满，通常一页足够）
+	var accounts []api.AccountItem
+	for page := 1; ; page++ {
+		lst, raw, err := f.Client.ListAccounts(page, 100)
+		if err != nil {
+			res.Errors = append(res.Errors, "accounts list: "+err.Error())
+			return
+		}
+		_ = raw
+		accounts = append(accounts, lst.Items...)
+		if page >= lst.Pages || len(lst.Items) == 0 {
+			break
+		}
+	}
+	// 2) 逐账号拉额度窗（限速由上层 Syncer 控制，这里直接顺序拉）
+	now := time.Now().Unix()
+	for _, a := range accounts {
+		au, raw, err := f.Client.GetAccountUsage(a.ID)
+		if err != nil {
+			res.Errors = append(res.Errors, "account usage "+fmt.Sprint(a.ID)+": "+err.Error())
+			continue
+		}
+		p := rawFilePath(o.RawDir, "account_usage", f.Email, fmt.Sprint(a.ID), 0)
+		_ = writeRawFile(p, "account_usage", f.Email, fmt.Sprint(a.ID), raw.Body)
+		w := &store.AccountWindow{
+			AccountID: a.ID, Email: f.Email, Name: a.Name, Platform: a.Platform,
+			FetchedAt: now,
+		}
+		if au.FiveHour != nil {
+			b, _ := json.Marshal(au.FiveHour)
+			w.FiveHourJSON = string(b)
+		}
+		if au.SevenDay != nil {
+			b, _ := json.Marshal(au.SevenDay)
+			w.SevenDayJSON = string(b)
+			w.SDUtilization = au.SevenDay.Utilization
+			if au.SevenDay.WindowStats != nil {
+				w.SDCost = au.SevenDay.WindowStats.Cost
+				w.SDUserCost = au.SevenDay.WindowStats.UserCost
+				w.SDRequests = au.SevenDay.WindowStats.Requests
+			}
+		}
+		if err := f.Store.SaveAccountWindow(w); err != nil {
+			res.Errors = append(res.Errors, "account window save: "+err.Error())
+		}
+	}
 }
 
 func first(a, b string) string {

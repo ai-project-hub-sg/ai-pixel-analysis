@@ -94,8 +94,10 @@ func (s *Store) tableRange(table, email string) (DataRange, error) {
 	return r, nil
 }
 
-func (s *Store) UsageRange(email string) (DataRange, error)  { return s.tableRange("usage_logs", email) }
-func (s *Store) LedgerRange(email string) (DataRange, error) { return s.tableRange("balance_ledger", email) }
+func (s *Store) UsageRange(email string) (DataRange, error) { return s.tableRange("usage_logs", email) }
+func (s *Store) LedgerRange(email string) (DataRange, error) {
+	return s.tableRange("balance_ledger", email)
+}
 
 // HasAnyData 判断库中是否已有任何业务数据。
 func (s *Store) HasAnyData() (bool, error) {

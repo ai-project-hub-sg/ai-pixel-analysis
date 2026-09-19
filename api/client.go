@@ -4,6 +4,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -86,9 +87,12 @@ func NewClient(host, tokenType, accessToken string) (*Client, error) {
 	}, nil
 }
 
+// ErrUnauthorized 表示登录态失效（401/认证错误码）。调用方应识别它并提示重新登录。
+var ErrUnauthorized = errors.New("session unauthorized: login required")
+
 // envelope 是统一响应壳
 type envelope struct {
-	Code    int             `json:"code"`
+	Code    json.RawMessage `json:"code"`
 	Message string          `json:"message"`
 	Data    json.RawMessage `json:"data"`
 }
@@ -114,12 +118,27 @@ func (c *Client) get(path string, params url.Values, out interface{}) (json.RawM
 	if err != nil {
 		return nil, err
 	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		return raw, ErrUnauthorized
+	}
 	var env envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return nil, fmt.Errorf("GET %s: not json (status %d): %.200s", u, resp.StatusCode, raw)
 	}
-	if env.Code != 0 {
-		return raw, fmt.Errorf("GET %s: code=%d msg=%s", u, env.Code, env.Message)
+	{
+		var codeAny any
+		json.Unmarshal(env.Code, &codeAny)
+		isZero := codeAny == nil || codeAny == float64(0) || codeAny == "0"
+		if !isZero {
+			var msg string
+			json.Unmarshal(env.Code, &msg)
+			var codeNum int
+			json.Unmarshal(env.Code, &codeNum)
+			if codeNum == 401 || msg == "UNAUTHORIZED" || msg == "Authorization header is required" {
+				return raw, ErrUnauthorized
+			}
+			return raw, fmt.Errorf("GET %s: code=%s msg=%s", u, string(env.Code), env.Message)
+		}
 	}
 	if out != nil {
 		if err := json.Unmarshal(env.Data, out); err != nil {

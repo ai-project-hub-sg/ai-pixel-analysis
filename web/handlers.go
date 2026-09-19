@@ -40,6 +40,36 @@ func (s *Server) incomeBetween(email string, start, end time.Time) float64 {
 }
 
 // ============ /api/overview ============
+// ovAccount 行：托管账号额度窗（从 account_windows 表读最新快照）
+type ovAccount struct {
+	AccountID   int64   `json:"account_id"`
+	Email       string  `json:"email"`
+	Name        string  `json:"name"`
+	Platform    string  `json:"platform"`
+	Cost7d      float64 `json:"cost_7d"`
+	UserCost7d  float64 `json:"user_cost_7d"`
+	Utilization float64 `json:"utilization"`
+	Requests7d  int64   `json:"requests_7d"`
+	FetchedAt   int64   `json:"fetched_at"`
+}
+
+func (s *Server) listAccountWindows() ([]ovAccount, error) {
+	rows, err := s.db.Query(`SELECT account_id, email, name, platform, COALESCE(sd_cost,0), COALESCE(sd_user_cost,0), COALESCE(sd_utilization,0), COALESCE(sd_requests,0), fetched_at FROM account_windows ORDER BY email, account_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ovAccount
+	for rows.Next() {
+		var a ovAccount
+		if err := rows.Scan(&a.AccountID, &a.Email, &a.Name, &a.Platform, &a.Cost7d, &a.UserCost7d, &a.Utilization, &a.Requests7d, &a.FetchedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) (any, error) {
 	now := time.Now()
 	curHour := now.Truncate(time.Hour)
@@ -47,7 +77,6 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) (any, er
 	ydaySameHour := curHour.AddDate(0, 0, -1)
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	yesterdayStart := todayStart.AddDate(0, 0, -1)
-	sevenDayAgo := todayStart.AddDate(0, 0, -7)
 	// 同环比分钟对齐：当前小时已过 N 分钟，则三个对比窗口都取各自小时的前 N 分钟，
 	// 保证"同口径"——拿 12 分钟数据去比完整 60 分钟没有意义。
 	elapsed := now.Sub(curHour)
@@ -61,8 +90,9 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) (any, er
 	}
 	type Row struct {
 		Email           string   `json:"email"`
-		Usage7d         int64    `json:"usage_7d"`
-		UsagePct7d      *float64 `json:"usage_pct_7d"`
+		Cost7d          float64  `json:"cost_7d"`
+		UserCost7d      float64  `json:"user_cost_7d"`
+		Utilization     *float64 `json:"utilization"`
 		TotalCost       float64  `json:"total_cost"`
 		ActualCost      float64  `json:"actual_cost"`
 		ShareIncome     float64  `json:"share_income"`
@@ -78,19 +108,29 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) (any, er
 		Balance         *float64 `json:"balance"`
 	}
 	var out []Row
-	var totalUsage7d int64
+	var totCost7d, totQuota7d float64
 	for _, e := range emails {
 		row := Row{Email: e}
-		s.db.QueryRow(`SELECT COUNT(*) FROM usage_logs WHERE email=? AND created_at>=?`, e, sevenDayAgo.Format(time.RFC3339)).Scan(&row.Usage7d)
-		totalUsage7d += row.Usage7d
+		var c7, u7 float64
+		s.db.QueryRow(`SELECT COALESCE(SUM(sd_cost),0), COALESCE(SUM(sd_user_cost),0) FROM account_windows WHERE email=?`, e).Scan(&c7, &u7)
+		row.Cost7d, row.UserCost7d = c7, u7
+		var quota float64
+		s.db.QueryRow(`SELECT COALESCE(SUM(CASE WHEN sd_utilization>0 THEN sd_cost/(sd_utilization/100.0) ELSE 0 END),0) FROM account_windows WHERE email=?`, e).Scan(&quota)
+		if quota > 0 {
+			v := c7 / quota * 100
+			row.Utilization = &v
+		}
+		totCost7d += c7
+		totQuota7d += quota
 		s.db.QueryRow(`SELECT COALESCE(SUM(total_cost),0), COALESCE(SUM(actual_cost),0) FROM usage_logs WHERE email=?`, e).Scan(&row.TotalCost, &row.ActualCost)
 		s.db.QueryRow(`SELECT COALESCE(SUM(CAST(amount AS REAL)),0) FROM balance_ledger WHERE email=? AND direction='credit' AND reason='account_share_income'`, e).Scan(&row.ShareIncome)
-		// 分钟对齐窗口：当前小时前N分钟 / 上一小时前N分钟 / 昨天同小时前N分钟
+		// 当前小时显示用分钟对齐窗口（与上小时/昨同小时前N分钟同口径）
 		row.CurHourIncome = s.incomeBetween(e, curHour, curWinEnd)
-		row.PrevHourIncome = s.incomeBetween(e, prevHour, prevWinEnd)
-		row.YdaySameHourInc = s.incomeBetween(e, ydaySameHour, ydayWinEnd)
-		row.HourQoq = pct(row.CurHourIncome, row.PrevHourIncome)
-		row.HourYoy = pct(row.CurHourIncome, row.YdaySameHourInc)
+		// 上一小时/昨日同小时显示**完整1小时**（需求5）；分钟对齐只用于比率
+		row.PrevHourIncome = s.incomeBetween(e, prevHour, curHour)
+		row.YdaySameHourInc = s.incomeBetween(e, ydaySameHour, ydaySameHour.Add(time.Hour))
+		row.HourQoq = pct(s.incomeBetween(e, curHour, curWinEnd), s.incomeBetween(e, prevHour, prevWinEnd))
+		row.HourYoy = pct(s.incomeBetween(e, curHour, curWinEnd), s.incomeBetween(e, ydaySameHour, ydayWinEnd))
 		row.TodayIncome = s.incomeBetween(e, todayStart, now)
 		row.YesterdayIncome = s.incomeBetween(e, yesterdayStart, todayStart)
 		row.DayQoq = pct(row.TodayIncome, row.YesterdayIncome)
@@ -108,20 +148,23 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) (any, er
 		}
 		out = append(out, row)
 	}
-	for i := range out {
-		if totalUsage7d > 0 {
-			v := float64(out[i].Usage7d) / float64(totalUsage7d) * 100
-			out[i].UsagePct7d = &v
-		}
+	var pct7d *float64
+	if totQuota7d > 0 {
+		v := totCost7d / totQuota7d * 100
+		pct7d = &v
 	}
+	accounts, _ := s.listAccountWindows()
 	return map[string]any{
 		"now":             now.Format(time.RFC3339),
 		"cur_hour":        fmtHour(curHour),
 		"prev_hour":       fmtHour(prevHour),
 		"yday_same_hour":  fmtHour(ydaySameHour),
 		"elapsed_minutes": int(elapsed.Minutes()),
-		"total_usage_7d":  totalUsage7d,
+		"total_cost_7d":   totCost7d,
+		"total_quota_7d":  totQuota7d,
+		"usage_pct_7d":    pct7d,
 		"rows":            out,
+		"accounts":        accounts,
 	}, nil
 }
 
@@ -260,27 +303,91 @@ func (s *Server) handleUsageByModel(w http.ResponseWriter, r *http.Request) (any
 		where = "email=?"
 		args = append(args, email)
 	}
-	rows, err := s.db.Query(`SELECT COALESCE(model,'?'), COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(cache_read_tokens),0), ROUND(COALESCE(SUM(total_cost),0),6), ROUND(COALESCE(SUM(actual_cost),0),6), ROUND(COALESCE(AVG(duration_ms),0),0), ROUND(COALESCE(AVG(rate_multiplier),0),4) FROM usage_logs WHERE `+where+` GROUP BY model ORDER BY SUM(total_cost) DESC`, args...)
+	// usage 侧：按模型聚合 账号成本(total_cost)/用户扣费(actual_cost)/tokens/耗时
+	rows, err := s.db.Query(`SELECT COALESCE(model,'?'), COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(cache_read_tokens),0), ROUND(COALESCE(SUM(total_cost),0),6), ROUND(COALESCE(SUM(actual_cost),0),6), ROUND(COALESCE(AVG(duration_ms),0),0) FROM usage_logs WHERE `+where+` GROUP BY model ORDER BY SUM(total_cost) DESC`, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	type M struct {
-		Model      string  `json:"model"`
-		Requests   int64   `json:"requests"`
-		Input      int64   `json:"input_tokens"`
-		Output     int64   `json:"output_tokens"`
-		Cache      int64   `json:"cache_read_tokens"`
-		TotalCost  float64 `json:"total_cost"`
-		ActualCost float64 `json:"actual_cost"`
-		AvgDur     float64 `json:"avg_duration_ms"`
-		AvgRate    float64 `json:"avg_rate_multiplier"`
+		Model       string   `json:"model"`
+		Requests    int64    `json:"requests"`
+		Input       int64    `json:"input_tokens"`
+		Output      int64    `json:"output_tokens"`
+		Cache       int64    `json:"cache_read_tokens"`
+		TotalCost   float64  `json:"total_cost"`   // 账号成本
+		ActualCost  float64  `json:"actual_cost"`  // 用户扣费
+		ShareIncome float64  `json:"share_income"` // 分账收入
+		AvgDur      float64  `json:"avg_duration_ms"`
+		RateMult    *float64 `json:"rate_multiplier"` // 用户扣费/账号成本
+		ShareRate   *float64 `json:"share_rate"`      // 分账收入/用户扣费
 	}
 	var out []M
+	midx := map[string]int{} // model -> out 下标（存索引避免 append 重分配导致指针失效）
 	for rows.Next() {
 		var m M
-		rows.Scan(&m.Model, &m.Requests, &m.Input, &m.Output, &m.Cache, &m.TotalCost, &m.ActualCost, &m.AvgDur, &m.AvgRate)
+		rows.Scan(&m.Model, &m.Requests, &m.Input, &m.Output, &m.Cache, &m.TotalCost, &m.ActualCost, &m.AvgDur)
+		midx[m.Model] = len(out)
 		out = append(out, m)
+	}
+	rows.Close()
+	// 分账收入按模型：ledger.ref_id 关联 usage_logs.id 取 model（ref_type=usage_log）
+	iw := "l.direction='credit' AND l.reason='account_share_income'"
+	iargs := []any{}
+	if email != "" {
+		iw += " AND l.email=?"
+		iargs = append(iargs, email)
+	}
+	// 分账收入按模型归因：ledger 按 account_id 聚合收入 -> 映射该 account 的 dominant model。
+	// request_id/ref_id 与上游流水不同源无法 join；account_id 是唯一可对上的归因维度。
+	acctIncome := map[int64]float64{}
+	{
+		arows, err := s.db.Query(`SELECT CAST(json_extract(l.metadata,'$.account_id') AS INTEGER) aid, SUM(CAST(l.amount AS REAL)) FROM balance_ledger l WHERE `+iw+` AND json_extract(l.metadata,'$.account_id') IS NOT NULL GROUP BY aid`, iargs...)
+		if err == nil {
+			for arows.Next() {
+				var aid int64
+				var v float64
+				arows.Scan(&aid, &v)
+				acctIncome[aid] = v
+			}
+			arows.Close()
+		}
+	}
+	// 一次性算每个 account 的 dominant model（按 total_cost 最大的模型）
+	domModel := map[int64]string{}
+	{
+		// 不按 email 过滤：account_id 全局唯一，直接全库找该账户的 dominant model
+		drows, err := s.db.Query(`SELECT account_id, model, SUM(total_cost) c FROM usage_logs WHERE account_id>0 GROUP BY account_id, model ORDER BY account_id, c DESC`)
+		if err == nil {
+			seen := map[int64]bool{}
+			for drows.Next() {
+				var aid int64
+				var m string
+				var c float64
+				drows.Scan(&aid, &m, &c)
+				if !seen[aid] {
+					domModel[aid] = m
+					seen[aid] = true
+				} // 每 account 第一行即 dominant
+			}
+			drows.Close()
+		}
+	}
+	for aid, inc := range acctIncome {
+		if m, ok := domModel[aid]; ok {
+			if idx, ok2 := midx[m]; ok2 {
+				out[idx].ShareIncome += inc
+			}
+		}
+	}
+	for i := range out {
+		if out[i].TotalCost > 0 {
+			v := out[i].ActualCost / out[i].TotalCost
+			out[i].RateMult = &v
+		}
+		if out[i].ActualCost > 0 {
+			v := out[i].ShareIncome / out[i].ActualCost
+			out[i].ShareRate = &v
+		}
 	}
 	return map[string]any{"items": out}, rows.Err()
 }
@@ -397,6 +504,15 @@ func (s *Server) handleLedger(w http.ResponseWriter, r *http.Request) (any, erro
 		where += " AND reason=?"
 		args = append(args, v)
 	}
+	// 需求7：按使用者（consumer_user_id）/ key（api_key_id）筛选，存于 metadata JSON
+	if v := q.Get("consumer"); v != "" {
+		where += " AND CAST(json_extract(metadata,'$.consumer_user_id') AS TEXT)=?"
+		args = append(args, v)
+	}
+	if v := q.Get("api_key"); v != "" {
+		where += " AND CAST(json_extract(metadata,'$.api_key_id') AS TEXT)=?"
+		args = append(args, v)
+	}
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	if limit <= 0 || limit > 500 {
 		limit = 100
@@ -410,15 +526,15 @@ func (s *Server) handleLedger(w http.ResponseWriter, r *http.Request) (any, erro
 	}
 	defer rows.Close()
 	type L struct {
-		ID        int64             `json:"id"`
-		Email     string            `json:"email"`
-		Direction string            `json:"direction"`
-		Amount    string            `json:"amount"`
-		Reason    string            `json:"reason"`
-		RefID     int64             `json:"ref_id"`
-		Balance   string            `json:"balance_after"`
-		Meta      map[string]any    `json:"metadata"`
-		CreatedAt string            `json:"created_at"`
+		ID        int64          `json:"id"`
+		Email     string         `json:"email"`
+		Direction string         `json:"direction"`
+		Amount    string         `json:"amount"`
+		Reason    string         `json:"reason"`
+		RefID     int64          `json:"ref_id"`
+		Balance   string         `json:"balance_after"`
+		Meta      map[string]any `json:"metadata"`
+		CreatedAt string         `json:"created_at"`
 	}
 	var out []L
 	for rows.Next() {
@@ -432,9 +548,11 @@ func (s *Server) handleLedger(w http.ResponseWriter, r *http.Request) (any, erro
 		}
 		out = append(out, l)
 	}
-	// 可选 reason 列表（供筛选下拉）
+	// 可选筛选项（供下拉）
 	reasons, _ := s.queryKV(`SELECT reason, COUNT(*) FROM balance_ledger GROUP BY reason ORDER BY 2 DESC`)
-	return map[string]any{"total": total, "items": out, "reasons": reasons}, rows.Err()
+	consumers, _ := s.queryKV(`SELECT CAST(json_extract(metadata,'$.consumer_user_id') AS TEXT), COUNT(*) FROM balance_ledger WHERE json_extract(metadata,'$.consumer_user_id') IS NOT NULL GROUP BY 1 ORDER BY 2 DESC LIMIT 50`)
+	keys, _ := s.queryKV(`SELECT CAST(json_extract(metadata,'$.api_key_id') AS TEXT), COUNT(*) FROM balance_ledger WHERE json_extract(metadata,'$.api_key_id') IS NOT NULL GROUP BY 1 ORDER BY 2 DESC LIMIT 50`)
+	return map[string]any{"total": total, "items": out, "reasons": reasons, "consumers": consumers, "api_keys": keys}, rows.Err()
 }
 
 // ============ /api/balance-trend?email= ============

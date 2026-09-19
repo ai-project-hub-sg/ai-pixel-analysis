@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 )
@@ -21,6 +22,9 @@ func (s *Server) handleSyncInit(w http.ResponseWriter, r *http.Request) (any, er
 	}
 	id, busy, err := s.sync.StartJob("init")
 	if err != nil {
+		if errors.Is(err, ErrNoSession) {
+			return map[string]any{"started": false, "auth_required": true, "error": "登录已失效或无会话，请重新登录"}, nil
+		}
 		return nil, err
 	}
 	return map[string]any{"started": true, "job_id": id, "busy": busy}, nil
@@ -36,6 +40,9 @@ func (s *Server) handleSyncUpdate(w http.ResponseWriter, r *http.Request) (any, 
 	}
 	id, busy, err := s.sync.StartJob("manual")
 	if err != nil {
+		if errors.Is(err, ErrNoSession) {
+			return map[string]any{"started": false, "auth_required": true, "error": "登录已失效或无会话，请重新登录"}, nil
+		}
 		return nil, err
 	}
 	return map[string]any{"started": true, "job_id": id, "busy": busy}, nil
@@ -51,6 +58,9 @@ func (s *Server) handleSyncBackfill(w http.ResponseWriter, r *http.Request) (any
 	}
 	id, busy, err := s.sync.StartJob("backfill")
 	if err != nil {
+		if errors.Is(err, ErrNoSession) {
+			return map[string]any{"started": false, "auth_required": true, "error": "登录已失效或无会话，请重新登录"}, nil
+		}
 		return nil, err
 	}
 	return map[string]any{"started": true, "job_id": id, "busy": busy}, nil
@@ -64,7 +74,9 @@ func (s *Server) handleSyncAuto(w http.ResponseWriter, r *http.Request) (any, er
 	if s.sync == nil {
 		return nil, errSyncDisabled()
 	}
-	var body struct{ On bool `json:"on"` }
+	var body struct {
+		On bool `json:"on"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		return nil, err
 	}
@@ -102,8 +114,27 @@ func (s *Server) handleSyncJobs(w http.ResponseWriter, r *http.Request) (any, er
 	return map[string]any{"jobs": jobs}, nil
 }
 
-func errMethod() error        { return &httpError{"method not allowed"} }
-func errSyncDisabled() error  { return &httpError{"sync not enabled: restart web with -sync flag (loads .env for credentials)"} }
+func errMethod() error { return &httpError{"method not allowed"} }
+func errSyncDisabled() error {
+	return &httpError{"sync not enabled: restart web with -sync flag (loads .env for credentials)"}
+}
 
 type httpError struct{ msg string }
+
 func (e *httpError) Error() string { return e.msg }
+
+// POST /api/sync/relogin —— 失登录后重新登录所有账号（在服务端执行，凭据不回显）。
+// 重新登录成功后复位 authValid，自动同步可恢复。
+func (s *Server) handleSyncRelogin(w http.ResponseWriter, r *http.Request) (any, error) {
+	if r.Method != http.MethodPost {
+		return nil, errMethod()
+	}
+	if s.sync == nil {
+		return nil, errSyncDisabled()
+	}
+	res, err := s.sync.Relogin()
+	if err != nil {
+		return nil, err
+	}
+	return res, nil
+}
