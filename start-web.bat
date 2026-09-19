@@ -1,9 +1,9 @@
 @echo off
 chcp 65001 >nul
 setlocal EnableDelayedExpansion
-rem 启动 AI Pixel 数据分析 Web 界面
-rem 交互式选择：端口（默认8080）、是否启用数据同步（默认启用）
-rem 直接回车 = 用默认值。输入非法会提示并重输，不会静默跳过。
+:: 启动 AI Pixel 数据分析 Web 界面
+:: 交互式选择：端口（默认8080）、是否启用数据同步（默认启用）
+:: 直接回车 = 用默认值。输入非法会提示并重输，不会静默跳过。
 cd /d "%~dp0"
 
 if not exist "ai-pixel-analysis.exe" (
@@ -18,21 +18,21 @@ echo   AI Pixel - 启动数据分析 Web 界面
 echo ==========================================
 echo.
 
-rem ===== 1) 端口 =====
-rem 注意：set /p 在变量已有值时回车会保留旧值，所以每轮先清空再询问。
+:: ===== 1) 端口 =====
+:: 注意：set /p 在变量已有值时回车会保留旧值，所以每轮先清空再询问。
 :ask_port
 set "PORT="
 set /p "PORT=请输入监听端口 [默认 8080，直接回车；输入 q 退出]: "<con
 if not defined PORT set "PORT=8080"
 if /i "%PORT%"=="q" (echo 已取消启动。& pause & exit /b 0)
-rem 校验：必须是纯数字（findstr 正则，^$ 锚定整行）
+:: 校验：必须是纯数字（findstr 正则，^$ 锚定整行）
 echo(%PORT%|findstr /r "^[0-9][0-9]*$" >nul
 if errorlevel 1 (
   echo [输入错误] "%PORT%" 不是有效端口，必须是 1-65535 的纯数字。
   echo   正确示例: 8080   或   9000
   goto ask_port
 )
-rem 校验：范围 1-65535
+:: 校验：范围 1-65535
 if %PORT% LSS 1 (
   echo [输入错误] 端口 %PORT% 太小，必须在 1-65535 之间。
   echo   正确示例: 8080   或   9000
@@ -43,7 +43,7 @@ if %PORT% GTR 65535 (
   echo   正确示例: 8080   或   9000
   goto ask_port
 )
-rem 校验：端口是否被占用
+:: 校验：端口是否被占用
 powershell -NoProfile -Command "if (Get-NetTCPConnection -LocalPort %PORT% -State Listen -ErrorAction SilentlyContinue) { exit 1 }" >nul 2>&1
 if errorlevel 1 (
   echo [端口被占用] %PORT% 已被其他程序占用，请换一个端口。
@@ -52,7 +52,7 @@ if errorlevel 1 (
   goto ask_port
 )
 
-rem ===== 2) 是否启用数据同步 =====
+:: ===== 2) 是否启用数据同步 =====
 set "SYNCARG="
 :ask_sync
 set "SYNC="
