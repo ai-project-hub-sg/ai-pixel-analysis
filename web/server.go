@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log"
+	"net"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -13,18 +15,28 @@ import (
 type Server struct {
 	db   *sql.DB
 	sync *SyncWorker
+
+	mu      sync.Mutex
+	httpSrv *http.Server
+	ln      net.Listener
+	// closeAction: "stop"(关闭服务) | "keep"(后台驻留)；仅内存态，由前端关闭弹窗写入
+	closeAction  string
+	shutdownOnce sync.Once
+	shutdownDone chan struct{}
 }
 
-func NewServer(db *sql.DB) *Server { return &Server{db: db} }
+func NewServer(db *sql.DB) *Server {
+	return &Server{db: db, closeAction: "stop", shutdownDone: make(chan struct{})}
+}
 
 // NewServerWithSync 在只读分析之外启用同步工作器。
 // sync 功能需要可写 store + host + db_secret（解密 session token）。
 func NewServerWithSync(db *sql.DB, sw *SyncWorker) *Server {
-	return &Server{db: db, sync: sw}
+	return &Server{db: db, sync: sw, closeAction: "stop", shutdownDone: make(chan struct{})}
 }
 
-// Listen 注册路由并启动 HTTP 服务
-func (s *Server) Listen(addr string) error {
+// routes 注册全部路由（与 Listen 分离，便于 httptest 复用）
+func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.Handle("/static/", http.FileServer(http.FS(staticFS)))
@@ -46,8 +58,29 @@ func (s *Server) Listen(addr string) error {
 	mux.HandleFunc("/api/sync/auto", s.wrap(s.handleSyncAuto))
 	mux.HandleFunc("/api/sync/status", s.wrap(s.handleSyncStatus))
 	mux.HandleFunc("/api/sync/jobs", s.wrap(s.handleSyncJobs))
+	// 生命周期：关闭行为 + 关闭服务（前端"关闭页面"弹窗）
+	mux.HandleFunc("/api/lifecycle/close-pref", s.wrap(s.handleClosePref))
+	mux.HandleFunc("/api/lifecycle/shutdown", s.wrap(s.handleShutdown))
+	return mux
+}
+
+// Listen 绑定端口并启动 HTTP 服务；/api/lifecycle/shutdown 会令其返回（服务停止）。
+func (s *Server) Listen(addr string) error {
+	mux := s.routes()
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.ln = ln
+	s.httpSrv = &http.Server{Handler: mux}
+	s.mu.Unlock()
 	log.Printf("web UI: http://localhost%s", addr)
-	return http.ListenAndServe(addr, mux)
+	err = s.httpSrv.Serve(ln)
+	if err == http.ErrServerClosed {
+		return nil // 经 /api/lifecycle/shutdown 正常退出
+	}
+	return err
 }
 
 func (s *Server) wrap(h func(http.ResponseWriter, *http.Request) (any, error)) http.HandlerFunc {

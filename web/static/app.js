@@ -506,3 +506,109 @@ function startDataVerWatch() {
   __dataVerTimer = setInterval(pollDataVersion, 3000);
 }
 startDataVerWatch();
+
+
+// ===== 关闭页面提醒（后台服务驻留提示）=====
+// 场景：关闭/刷新/跳转页面时，若后端开启了同步服务，弹窗让用户选择
+// "保留后台服务"（继续驻留同步）或"关闭服务"（POST /api/lifecycle/shutdown）。
+// 勾选"不再提醒"后直接按所选方式执行，不再弹窗。
+// 存储说明：不再提醒+行为选择存 localStorage（本机浏览器）；同时把行为
+// 同步到后端内存（/api/lifecycle/close-pref），供"静默关闭"时判定。
+// 限制：浏览器不允许页面脚本真正关闭用户手动开的标签页，且 beforeunload
+// 里无法弹出自定义 UI；因此对"关闭"动作的可靠拦截是 beforeunload 原生确认框 +
+// sendBeacon 发动作。完整体验 = 页面内"关闭界面"按钮（见下）。
+
+const CG = {
+  key: 'aipixel.closeGuard',            // localStorage: {noRemind, action}
+  mask: () => document.getElementById('closeGuardMask'),
+  noRemind: () => document.getElementById('cgNoRemind'),
+  read() {
+    try { return JSON.parse(localStorage.getItem(CG.key) || '{}'); } catch (e) { return {}; }
+  },
+  save(o) { localStorage.setItem(CG.key, JSON.stringify(Object.assign(CG.read(), o))); },
+};
+
+let __syncEnabledCache = null; // 最近一次 status 拿到的 sync_enabled，beforeunload 用（同步 fetch 太慢）
+
+async function cgRefreshEnabled() {
+  try {
+    const d = await api('/api/sync/status');
+    __syncEnabledCache = !!d.sync_enabled;
+  } catch (e) { /* 服务已不可达视为无服务，不拦关闭 */ __syncEnabledCache = false; }
+}
+
+// 用户选择动作：记 localStorage + 通知后端（close-pref），keep 时什么也不做
+async function cgChoose(action, noRemind) {
+  CG.save({ action: action, noRemind: !!noRemind });
+  try { await postJSON('/api/lifecycle/close-pref', { action: action }); } catch (e) {}
+  if (action === 'stop') {
+    // sendBeacon 也能用，但这里是显式按钮，直接 POST 拿到结果更稳
+    try { await postJSON('/api/lifecycle/shutdown'); } catch (e) {}
+    cgShowStopped();
+  } else {
+    cgHide();
+    if (noRemind) {
+      // 不再提醒 + 保留：下次关闭不再弹（原生确认也不再弹，见 beforeunload）
+    }
+  }
+}
+
+function cgShow() {
+  const m = CG.mask(); if (!m) return;
+  const saved = CG.read();
+  CG.noRemind().checked = !!saved.noRemind;
+  m.style.display = 'flex';
+}
+function cgHide() { const m = CG.mask(); if (m) m.style.display = 'none'; }
+
+function cgShowStopped() {
+  const dlg = document.querySelector('.cg-dialog');
+  if (!dlg) return;
+  dlg.innerHTML = '<h3>服务已停止</h3><p class="cg-text">后台同步服务已关闭，数据分析界面将不可用。可以直接关闭本页。</p>' +
+    '<div class="cg-btns"><button class="btn primary" onclick="window.close()">关闭本页</button></div>';
+}
+
+// 弹窗按钮
+(function cgBind() {
+  const keep = document.getElementById('cgKeep');
+  if (!keep) return;
+  keep.addEventListener('click', () => cgChoose('keep', CG.noRemind().checked));
+  document.getElementById('cgStop').addEventListener('click', () => cgChoose('stop', CG.noRemind().checked));
+  document.getElementById('cgCancel').addEventListener('click', cgHide);
+  // 头部加"关闭界面"按钮：用户主动点 = 最可靠的入口，弹窗可完整展示
+  const bar = document.querySelector('.controls');
+  if (bar) {
+    const b = document.createElement('button');
+    b.id = 'btnCloseUI'; b.className = 'btn'; b.textContent = '关闭界面';
+    b.style.marginLeft = '8px';
+    b.addEventListener('click', async () => {
+      await cgRefreshEnabled();
+      if (!__syncEnabledCache) { window.close(); return; } // 没开同步：直接关，无需打扰
+      const saved = CG.read();
+      if (saved.noRemind && saved.action) { cgChoose(saved.action, true); return; }
+      cgShow();
+    });
+    bar.appendChild(b);
+  }
+})();
+
+// 浏览器关闭/刷新拦截：自定义弹窗在 beforeunload 里弹不出来，
+// 只能给原生确认框。若用户已选"不再提醒+保留"则完全不拦；
+// 若已选"不再提醒+关闭服务"则用 sendBeacon 静默停机，不拦。
+// 默认（未设置）：有同步服务时拦一下，提示回页面用"关闭界面"按钮选择。
+window.addEventListener('beforeunload', (e) => {
+  if (!__syncEnabledCache) return;
+  const saved = CG.read();
+  if (saved.noRemind) {
+    if (saved.action === 'stop') {
+      navigator.sendBeacon('/api/lifecycle/shutdown', new Blob(['{}'], { type: 'application/json' }));
+    }
+    return; // keep 或已处理：不拦
+  }
+  e.preventDefault();
+  e.returnValue = '后台同步服务仍在运行。如需选择保留/关闭服务，请留在页面用右上角"关闭界面"按钮。';
+});
+
+// 首次轮询后就知道 sync_enabled（pollDataVersion 每3s也会刷新缓存）
+cgRefreshEnabled();
+setInterval(cgRefreshEnabled, 3000);

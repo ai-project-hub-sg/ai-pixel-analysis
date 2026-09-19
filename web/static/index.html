@@ -151,6 +151,21 @@
 
 </main>
 <footer class="wrap">数据来自本地 sqlite（只读）；时间均为账号本地时区。</footer>
+
+<!-- 关闭页面提醒弹窗 -->
+<div id="closeGuardMask" class="cg-mask" style="display:none">
+  <div class="cg-dialog">
+    <h3>关闭数据分析界面？</h3>
+    <p class="cg-text">后台同步服务仍在运行。关闭页面后，服务可以继续驻留后台同步数据，也可以一并停止。</p>
+    <label class="chk"><input type="checkbox" id="cgNoRemind"> 不再提醒，下次直接按下面的方式处理</label>
+    <div class="cg-btns">
+      <button id="cgKeep" class="btn primary">保留后台服务</button>
+      <button id="cgStop" class="btn danger">关闭服务</button>
+      <button id="cgCancel" class="btn">取消</button>
+    </div>
+    <p class="cg-hint">保留后如需停止服务：重新打开本页面，在「数据同步」页操作；或关闭启动它的命令行窗口。</p>
+  </div>
+</div>
 <script src="/static/app.js"></script>
 </body>
 </html>

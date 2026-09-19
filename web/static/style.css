@@ -76,3 +76,14 @@ footer{color:var(--dim);font-size:12px;padding:20px;border-top:1px solid var(--l
 .tag.failed, .tag.interrupted { background:#4d1f28; color:#ff7a88; }
 .tag.skipped, .tag.pending { background:#2a2f3a; color:#8b98b0; }
 .chunk-skipped td { color:#5a6680; }
+
+
+/* ===== 关闭页面提醒弹窗 ===== */
+.cg-mask{position:fixed;inset:0;background:rgba(8,11,18,.72);z-index:1000;display:flex;align-items:center;justify-content:center}
+.cg-dialog{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px 24px;max-width:440px;width:calc(100% - 40px);box-shadow:0 18px 60px rgba(0,0,0,.5)}
+.cg-dialog h3{font-size:16px;margin-bottom:10px}
+.cg-text{color:var(--txt);font-size:13px;margin-bottom:14px}
+.cg-btns{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
+.btn.danger{background:#5a2430;border-color:#7a2f3d;color:#ffb3ba}
+.btn.danger:hover:not(:disabled){background:#6e2c3a}
+.cg-hint{color:var(--dim);font-size:11px;margin-top:14px}
