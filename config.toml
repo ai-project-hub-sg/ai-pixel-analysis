@@ -1,6 +1,32 @@
 # ai-pixel-analysis 服务配置
-# host 为完整基础地址（含 scheme），port 仅在非默认端口时填写
-[server]
-host = "https://ai-pixel.online"
-port = 0
+# 所有接口的地址都在这里显式声明；每个接口可独立配置 host 与 port。
+# 修改地址/端口只需改这里，代码不内嵌任何端口或主机名。
+
+# 全局默认超时（毫秒），可被各端点覆盖
+[defaults]
 timeout_ms = 30000
+
+# 登录页 + 登录接口（GET /login 与 POST /api/v1/auth/login 同 host）
+[endpoint.login]
+host = "https://ai-pixel.online"
+port = 443
+
+# 账号列表 GET /api/v1/accounts
+[endpoint.accounts]
+host = "https://ai-pixel.online"
+port = 443
+
+# 账号用量 GET /api/v1/accounts/{id}/usage
+[endpoint.usage]
+host = "https://ai-pixel.online"
+port = 443
+
+# 账号状态/模型统计 GET /api/v1/accounts/{id}/stats
+[endpoint.stats]
+host = "https://ai-pixel.online"
+port = 443
+
+# 余额流水 GET /api/v1/usage/balance-ledger
+[endpoint.ledger]
+host = "https://ai-pixel.online"
+port = 443

@@ -127,7 +127,11 @@ func mustSetup(envPath, tomlPath, dbPath string) (*config.Config, *store.Store) 
 }
 
 func runLogin(cfg *config.Config, db *store.Store) {
-	client, err := auth.NewClient(cfg.Server.Host, cfg.Server.TimeoutMs)
+	ep, err := cfg.Endpoint("login")
+	if err != nil {
+		log.Fatalf("endpoint login: %v", err)
+	}
+	client, err := auth.NewClient(ep.BaseURL(), ep.TimeoutMs)
 	if err != nil {
 		log.Fatalf("new auth client: %v", err)
 	}
@@ -175,7 +179,12 @@ func runFetch(cfg *config.Config, db *store.Store, onlyEmail string, o *pipeline
 			log.Printf("get session %s: %v", e, err)
 			continue
 		}
-		client, err := api.NewClient(cfg.Server.Host, sess.TokenType, sess.AccessToken, cfg.Server.TimeoutMs)
+		ep, err := cfg.Endpoint("accounts")
+		if err != nil {
+			log.Printf("endpoint accounts: %v", err)
+			continue
+		}
+		client, err := api.NewClient(ep.BaseURL(), sess.TokenType, sess.AccessToken, ep.TimeoutMs)
 		if err != nil {
 			log.Printf("api client %s: %v", e, err)
 			continue
@@ -204,7 +213,12 @@ func runFetchAll(cfg *config.Config, db *store.Store, onlyEmail string, o *pipel
 			log.Printf("get session %s: %v", e, err)
 			continue
 		}
-		client, err := api.NewClient(cfg.Server.Host, sess.TokenType, sess.AccessToken, cfg.Server.TimeoutMs)
+		ep, err := cfg.Endpoint("accounts")
+		if err != nil {
+			log.Printf("endpoint accounts: %v", err)
+			continue
+		}
+		client, err := api.NewClient(ep.BaseURL(), sess.TokenType, sess.AccessToken, ep.TimeoutMs)
 		if err != nil {
 			log.Printf("api client %s: %v", e, err)
 			continue

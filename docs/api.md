@@ -1,121 +1,242 @@
-# 数据抽取接口文档
+# 数据抽取接口开发文档
 
-本文档说明 version2 分支各数据抽取接口的用法、参数、返回与落盘/入库规则。
-所有接口均为只读 GET/POST，不做任何上游数据修改。
+本文档面向后续开发，说明 version2 各数据抽取封装的 **函数签名、入参、返回结构、典型调用示例**，以及 **内部如何处理上游原始响应**（落盘、清洗、入库）。CLI 命令只是这些封装的一层薄壳。
 
-## 前置条件
+## 0. 分层与职责
 
-- `.env` 提供机密配置：`user_name_N` / `user_password_N`（或 `user_passwor_N`）成组出现；`db_secret` 用于凭据加解密。
-- `config.toml` 提供服务地址：
+| 层 | 包 | 职责 |
+|---|---|---|
+| 配置 | `config` | 读 `.env`（机密）+ `config.toml`（各接口地址），产出 `Config` |
+| 登录 | `auth` | `/login` 页面取 revision，`/api/v1/auth/login` 换 token |
+| 数据接口 | `api` | 5 个只读 GET 封装，每个返回「结构体 + 原始响应」 |
+| 编排 | `pipeline` | 调 `api` 拿数据，写原始 JSON 到 `data/raw/`，清洗后调 `store` 入库 |
+| 存储 | `store` | SQLite 建表/加解密/upsert |
+| 入口 | `main.go` | 组装以上各层，暴露子命令 |
+
+## 1. 端点配置（config.toml）
+
+所有接口的 host 与 port **都显式配置**，代码不内嵌任何主机名或端口。
 
 ```toml
-[server]
-host = "https://ai-pixel.online"
-port = 0
+[defaults]
 timeout_ms = 30000
+
+[endpoint.login]     # GET /login 与 POST /api/v1/auth/login
+host = "https://ai-pixel.online"
+port = 443
+
+[endpoint.accounts]  # GET /api/v1/accounts
+host = "https://ai-pixel.online"
+port = 443
+
+[endpoint.usage]     # GET /api/v1/accounts/{id}/usage
+host = "https://ai-pixel.online"
+port = 443
+
+[endpoint.stats]     # GET /api/v1/accounts/{id}/stats
+host = "https://ai-pixel.online"
+port = 443
+
+[endpoint.ledger]    # GET /api/v1/usage/balance-ledger
+host = "https://ai-pixel.online"
+port = 443
 ```
 
-## 1. 登录
+取用端点：
 
-**命令**: `ai-pixel-analysis login`
+```go
+cfg, err := config.Load(".env", "config.toml")
+ep, err := cfg.Endpoint("accounts") // Endpoint{Host, Port, TimeoutMs}
+base := ep.BaseURL()                // 标准端口(443/80/0)原样返回 host；非标准拼 host:port
+```
 
-**流程**:
-1. `GET {host}/login` 从 `window.__APP_CONFIG__` 提取 `login_agreement_revision`。
-2. `POST {host}/api/v1/auth/login` body: `{"email","password","login_agreement_revision"}`。
-3. 成功返回 `access_token`/`refresh_token`/`token_type`/`expires_in`/cookies。
+## 2. 登录封装（auth 包）
 
-**入库**: `auth_sessions` 表，access_token/refresh_token/cookies 经 AES-256-GCM（key=SHA256(db_secret)）加密存储；同一 email 覆盖更新。
+### FetchAgreementRevision
 
-## 2. 账号列表
+```go
+func (c *auth.Client) FetchAgreementRevision(loginPath string) (string, error)
+```
 
-**命令**: `ai-pixel-analysis accounts`
+- 入参：登录页路径，通常 `"/login"`
+- 内部：`GET ep.BaseURL()+loginPath`，用正则 `window.__APP_CONFIG__=({...})` 提取 JSON，读 `login_agreement_revision`；若 `login_agreement_enabled=false` 返回空串
+- 返回：revision 字符串；未启用协议时为空串
 
-**接口**: `GET {host}/api/v1/accounts?page=&page_size=&sort_by=created_at&sort_order=desc&timezone=Asia/Shanghai`
+### Login
 
-**参数** (flag):
-- `-page-size N` 每页条数，默认 20
-- `-max-pages N` 分页上限，默认 200
+```go
+func (c *auth.Client) Login(email, password, revision string) (*auth.LoginResult, error)
 
-**解析字段**: `id`, `name`, `platform`, `account_level`, `concurrency`, `status`
+type LoginResult struct {
+    AccessToken  string
+    RefreshToken string
+    ExpiresIn    int
+    TokenType    string
+    User         json.RawMessage
+    Cookies      string  // "k1=v1; k2=v2"
+}
+```
 
-**入库**: `accounts` 表（按 email 全量覆盖）
+- 内部：`POST {base}/api/v1/auth/login`，body `{"email","password","login_agreement_revision"}`
+- 解析 envelope `{code,message,data}`，`code!=0` 报错；`temp_token` 出现说明要 2FA，直接报错
+- 返回 access_token 与 jar 中收集的 cookie
 
-**落盘**: `data/raw/accounts/<email>/<ts>__<params>__p<page>.json`
+### 典型用法
 
-## 3. 账号用量
+```go
+ep, _ := cfg.Endpoint("login")
+cli, _ := auth.NewClient(ep.BaseURL(), ep.TimeoutMs)
+rev, _ := cli.FetchAgreementRevision("/login")
+res, err := cli.Login(user.Name, user.Password, rev)
+```
 
-**命令**: `ai-pixel-analysis usage`
+## 3. 数据接口封装（api 包）
 
-**接口**: `GET {host}/api/v1/accounts/{account_id}/usage?source=local&timezone=Asia/Shanghai`
+所有方法签名统一为：
 
-**解析字段**: `seven_day.utilization`, `seven_day.window_stats.cost`, `standard_cost`, `user_cost`
+```go
+func (c *api.Client) Xxx(...) (*T, api.RawResult, error)
 
-**计算**: `estimated_total_quota = round(cost / utilization)`；utilization=0 时记为 **-999**。
+type RawResult struct {
+    URL  string  // 实际请求的完整 URL（含 query）
+    Body []byte  // 完整响应原文（envelope JSON），供落盘
+}
+```
 
-**入库**: `account_usage` 表（account_id+email 主键，覆盖更新）
+约定：**结构化结果** 与 **原始响应** 同时返回。上层把 `RawResult.Body` 原样写入 `data/raw/`，再把结构体字段清洗入库。
 
-**落盘**: `data/raw/account_usage/<email>/<ts>__account_<id>.json`
+构造客户端：
 
-## 4. 账号状态/模型统计
+```go
+ep, _ := cfg.Endpoint("accounts")
+cli, _ := api.NewClient(ep.BaseURL(), sess.TokenType, sess.AccessToken, ep.TimeoutMs)
+// Authorization 头自动设为 "<TokenType> <AccessToken>"，默认 Bearer
+```
 
-**命令**: `ai-pixel-analysis stats`
+错误：`api.ErrUnauthorized` 表示 token 失效（HTTP 401 或业务 code=401）。
 
-**接口**: `GET {host}/api/v1/accounts/{account_id}/stats?start_date=&end_date=&timezone=Asia/Shanghai`
+### 3.1 ListAccounts —— 账号列表
 
-**参数** (flag):
-- `-start YYYY-MM-DD` 起始日期（默认今天）
-- `-end YYYY-MM-DD` 结束日期（默认同 start）
-- `-timezone` 默认 Asia/Shanghai
+```go
+func (c *api.Client) ListAccounts(q url.Values) (*api.AccountList, api.RawResult, error)
 
-**解析字段**: `models[]` 内每个模型的 `model/requests/input_tokens/output_tokens/cache_creation_tokens/cache_read_tokens/total_tokens/cost/actual_cost/account_cost`
+type AccountList struct {
+    Items []AccountItem // {ID,Name,Platform,AccountLevel,Status,Concurrency}
+    Total int64
+    Page  int
+    Pages int
+}
+```
 
-**入库**: `account_stats` 表（account_id+email+start_date+end_date+model 主键）
+- 上游：`GET {base}/api/v1/accounts?<q>`
+- `api.DefaultAccountsQuery()` 返回需求默认参数（page=1,page_size=20,sort_by=created_at,sort_order=desc,timezone=Asia/Shanghai）
 
-**落盘**: `data/raw/account_stats/<email>/<ts>__account_<id>_start_<s>_end_<e>.json`（原始完整 JSON）
+示例：
 
-## 5. 余额流水
+```go
+q := api.DefaultAccountsQuery()
+q.Set("page_size", "50")
+list, raw, err := cli.ListAccounts(q)
+// list.Items[*] 入库；raw.Body 落盘
+```
 
-**命令**: `ai-pixel-analysis ledger`
+### 3.2 GetAccountUsage —— 账号用量
 
-**接口**: `GET {host}/api/v1/usage/balance-ledger?page=&page_size=&direction=&start_date=&end_date=&start_time=&end_time=&timezone=&sort_order=desc`
+```go
+func (c *api.Client) GetAccountUsage(accountID int64, source, timezone string) (*api.AccountUsage, api.RawResult, error)
 
-**参数** (flag):
-- `-start`, `-end` 日期过滤
-- `-start-time`, `-end-time` RFC3339 精确时间（优先级高于日期）
-- `-page-size`, `-max-pages`
+type AccountUsage struct {
+    Source    string
+    UpdatedAt string
+    FiveHour  *UsageWindow
+    SevenDay  *UsageWindow // 取 .Utilization 与 .WindowStats.{Cost,StandardCost,UserCost}
+}
+```
 
-**清洗**: 从 `metadata` 提取 `consumer_user_id`, `api_key_id`, `account_id`, `request_id`
+- 上游：`GET {base}/api/v1/accounts/{accountID}/usage?source=local&timezone=Asia/Shanghai`
+- 业务计算在 pipeline 层做：`estimated_total_quota = round(SevenDay.WindowStats.Cost / SevenDay.Utilization)`，utilization=0 记 `-999`
 
-**入库**: `balance_ledger` 表（id 主键，upsert）
+### 3.3 GetAccountStats —— 账号状态/模型统计
 
-**落盘**: `data/raw/balance_ledger/<email>/<ts>__<params>__p<page>.json`
+```go
+func (c *api.Client) GetAccountStats(accountID int64, startDate, endDate, timezone string) (*api.AccountStats, api.RawResult, error)
 
-## 6. 一键全流程
+type AccountStats struct {
+    AccountID int64
+    StartDate string
+    EndDate   string
+    Models    []ModelStat // model/requests/tokens/cost/actual_cost/account_cost
+}
+```
 
-**命令**: `ai-pixel-analysis all`
+- 上游：`GET {base}/api/v1/accounts/{accountID}/stats?start_date=&end_date=&timezone=`
+- 落盘保存的是 **完整原始 JSON**（`RawResult.Body`），结构体只解析 models 数组用于入库
 
-依次执行 login → accounts → usage → stats → ledger，最后为每个 email 生成运行报告到 `data/reports/run_<ts>.md`。
+### 3.4 ListBalanceLedger —— 余额流水
 
-## 数据库表速览
+```go
+func (c *api.Client) ListBalanceLedger(q url.Values) (*api.LedgerList, api.RawResult, error)
 
-| 表 | 说明 |
-|---|---|
-| auth_sessions | 登录凭据（加密） |
-| accounts | 账号列表 |
-| account_usage | 账号用量+预估额度 |
-| account_stats | 按日期的模型统计 |
-| balance_ledger | 余额流水+metadata 清洗字段 |
-| fetch_runs | 每次抓取的运行日志 |
+type LedgerList struct {
+    Items []LedgerItem // {ID,Direction,Amount,Reason,RefType,RefID,BalanceAfter,Metadata,CreatedAt}
+    Total int64
+    Pages int
+}
+```
 
-## 原始数据目录结构
+- 上游：`GET {base}/api/v1/usage/balance-ledger?<q>`
+- 支持参数：`page,page_size,direction,start_date,end_date,start_time,end_time,timezone,sort_order`
+- 清洗：pipeline 把每条 `Metadata`（json.RawMessage）反序列化为 `api.LedgerMeta{ConsumerUserID,APIKeyID,AccountID,RequestID}` 后入列
+
+## 4. 编排层（pipeline 包）
+
+`pipeline.Fetcher` 串联「调接口 → 落盘原始 JSON → 清洗 → 入库」。
+
+```go
+f := &pipeline.Fetcher{Client: apiClient, Store: db, Email: email}
+o := &pipeline.Options{StartDate:"2026-09-22", EndDate:"2026-09-22", PageSize:20, MaxPages:200, RawDir:"data/raw", Timezone:"Asia/Shanghai"}
+res := &pipeline.Result{}
+f.FetchAccounts(o, res) // res.Accounts / res.RawFiles / res.Errors
+f.FetchUsage(o, res)
+f.FetchStats(o, res)
+f.FetchLedger(o, res)
+```
+
+每个 `FetchXxx` 的内部流程：
+
+1. 调对应 `api.Client` 方法，拿到 `(结构体, RawResult, err)`
+2. `RawResult.Body` 写入 `{RawDir}/<kind>/<email>/<ts>__<params>[__p<page>].json`
+3. 结构体字段清洗/计算后调 `store` 对应 Save 方法 upsert
+4. 写一条 `fetch_runs` 日志
+
+`Result` 汇总：`Accounts / Usages / StatsModels / LedgerItems / RawFiles[] / Errors[]`。
+
+## 5. 存储层（store 包）
+
+| 方法 | 表 | 语义 |
+|---|---|---|
+| `SaveSession(email, AuthResult)` | auth_sessions | token/cookie AES-256-GCM 加密，email 唯一，覆盖更新 |
+| `GetSession(email)` / `ListSessions()` | auth_sessions | 解密读出 |
+| `SaveAccounts(email, items)` | accounts | 按 email 全量覆盖 |
+| `SaveAccountUsage(email, id, util, cost, sc, uc)` | account_usage | upsert，内部计算 estimated_total_quota |
+| `SaveAccountStats(email, id, s, e, models)` | account_stats | (account_id,email,start,end,model) 主键 upsert |
+| `SaveLedger(email, items)` | balance_ledger | id 主键 upsert，含 metadata 清洗列 |
+| `LogFetch(email,kind,params,n,rawFile)` | fetch_runs | 运行日志 |
+
+## 6. 原始响应落盘约定
 
 ```
-data/
-  raw/
-    accounts/<email>/...
-    account_usage/<email>/...
-    account_stats/<email>/...
-    balance_ledger/<email>/...
-  reports/
-    run_<ts>.md
+data/raw/<kind>/<email_sanitized>/<yyyymmdd_hhmmss>__<param_summary>[__p<page>].json
 ```
+
+- `kind` ∈ `accounts | account_usage | account_stats | balance_ledger`
+- email 中 `@`→`_at_`、`.`→`_`
+- 内容为上游 envelope 完整原文，未裁剪
+
+## 7. CLI（薄壳）
+
+```
+ai-pixel-analysis login|accounts|usage|stats|ledger|all [flags]
+```
+
+`all` = runLogin → FetchAccounts → FetchUsage → FetchStats → FetchLedger → 每账号写 `data/reports/run_<ts>.md`。

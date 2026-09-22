@@ -17,18 +17,49 @@ type User struct {
 	Password string
 }
 
-// Server 是 config.toml 中的服务地址配置
-type Server struct {
-	Host      string // 完整 scheme://host，如 https://ai-pixel.online
-	Port      int    // 可选；0 表示用默认 443/80
-	TimeoutMs int    // 请求超时毫秒
+// Endpoint 是单个接口的地址配置：host 与 port 都必须在 config.toml 中显式给出。
+// URL = host（若 port 非标准则外部调用方负责拼接为 host:port）。
+type Endpoint struct {
+	Host      string
+	Port      int
+	TimeoutMs int // 0 表示继承 defaults.timeout_ms
 }
 
-// Config 聚合 .env 机密 + config.toml 服务配置
+// BaseURL 返回该端点的基础地址。port 为 443/80/0 时直接返回 host；
+// 其余端口拼接为 host:port。不会做任何"非默认才填"的隐式假设。
+func (e Endpoint) BaseURL() string {
+	h := strings.TrimRight(e.Host, "/")
+	if e.Port == 0 || e.Port == 80 || e.Port == 443 {
+		return h
+	}
+	return fmt.Sprintf("%s:%d", h, e.Port)
+}
+
+// Config 聚合 .env 机密 + config.toml 各端点配置
 type Config struct {
-	Server   Server
-	DBSecret string
-	Users    []User // 按编号排序
+	Defaults  Defaults
+	Endpoints map[string]Endpoint // key: login | accounts | usage | stats | ledger
+	DBSecret  string
+	Users     []User // 按编号排序
+}
+
+type Defaults struct {
+	TimeoutMs int
+}
+
+// Endpoint 取指定端点；不存在时返回错误提示在 config.toml 中补齐。
+func (c *Config) Endpoint(name string) (Endpoint, error) {
+	e, ok := c.Endpoints[name]
+	if !ok {
+		return Endpoint{}, fmt.Errorf("config.toml 缺少 [endpoint.%s] 配置", name)
+	}
+	if e.Host == "" {
+		return Endpoint{}, fmt.Errorf("config.toml [endpoint.%s].host 为空", name)
+	}
+	if e.TimeoutMs <= 0 {
+		e.TimeoutMs = c.Defaults.TimeoutMs
+	}
+	return e, nil
 }
 
 // LoadEnv 只读 .env，返回键值表（不回显值）
@@ -57,7 +88,8 @@ func LoadEnv(envPath string) (map[string]string, error) {
 	return kv, sc.Err()
 }
 
-// LoadToml 极简 TOML 解析：仅支持 key=value 与 [section]，满足本项目配置需求
+// LoadToml 极简 TOML 解析：支持 [section] 与 [a.b] 两级、key=value。
+// [endpoint.login] 解析为 section 名 "endpoint.login"。
 func LoadToml(path string) (map[string]map[string]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -99,20 +131,31 @@ func Load(envPath, tomlPath string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	srv := Server{TimeoutMs: 30000}
-	if s, ok := tl["server"]; ok {
-		srv.Host = s["host"]
-		if p, err := strconv.Atoi(s["port"]); err == nil {
-			srv.Port = p
-		}
-		if t, err := strconv.Atoi(s["timeout_ms"]); err == nil && t > 0 {
-			srv.TimeoutMs = t
+	cfg := &Config{
+		Defaults:  Defaults{TimeoutMs: 30000},
+		Endpoints: map[string]Endpoint{},
+		DBSecret:  kv["db_secret"],
+	}
+	if d, ok := tl["defaults"]; ok {
+		if t, err := strconv.Atoi(d["timeout_ms"]); err == nil && t > 0 {
+			cfg.Defaults.TimeoutMs = t
 		}
 	}
-	if srv.Host == "" {
-		return nil, fmt.Errorf("config.toml missing [server].host")
+	// 解析所有 [endpoint.<name>] 节
+	for sec, kv2 := range tl {
+		if !strings.HasPrefix(sec, "endpoint.") {
+			continue
+		}
+		name := strings.TrimPrefix(sec, "endpoint.")
+		e := Endpoint{Host: kv2["host"]}
+		if p, err := strconv.Atoi(kv2["port"]); err == nil {
+			e.Port = p
+		}
+		if t, err := strconv.Atoi(kv2["timeout_ms"]); err == nil && t > 0 {
+			e.TimeoutMs = t
+		}
+		cfg.Endpoints[name] = e
 	}
-	cfg := &Config{Server: srv, DBSecret: kv["db_secret"]}
 	if cfg.DBSecret == "" {
 		return nil, fmt.Errorf("missing db_secret in .env")
 	}
