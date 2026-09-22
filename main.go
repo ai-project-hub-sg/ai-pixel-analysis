@@ -127,21 +127,25 @@ func mustSetup(envPath, tomlPath, dbPath string) (*config.Config, *store.Store) 
 }
 
 func runLogin(cfg *config.Config, db *store.Store) {
-	ep, err := cfg.Endpoint("login")
-	if err != nil {
-		log.Fatalf("endpoint login: %v", err)
-	}
-	client, err := auth.NewClient(ep.BaseURL(), ep.TimeoutMs)
+	client, err := auth.NewClient(cfg.Server.BaseURL(), cfg.Server.TimeoutMs)
 	if err != nil {
 		log.Fatalf("new auth client: %v", err)
 	}
-	revision, err := client.FetchAgreementRevision("/login")
+	loginPage, err := cfg.Endpoint("login_page")
+	if err != nil {
+		log.Fatalf("endpoint login_page: %v", err)
+	}
+	loginPath, err := cfg.Endpoint("login")
+	if err != nil {
+		log.Fatalf("endpoint login: %v", err)
+	}
+	revision, err := client.FetchAgreementRevision(loginPage)
 	if err != nil {
 		log.Fatalf("fetch agreement revision: %v", err)
 	}
 	for _, u := range cfg.Users {
 		fmt.Printf("login %s ... ", u.Name)
-		res, err := client.Login(u.Name, u.Password, revision)
+		res, err := client.Login(loginPath, u.Name, u.Password, revision)
 		if err != nil {
 			fmt.Printf("FAIL %v\n", err)
 			continue
@@ -179,12 +183,7 @@ func runFetch(cfg *config.Config, db *store.Store, onlyEmail string, o *pipeline
 			log.Printf("get session %s: %v", e, err)
 			continue
 		}
-		ep, err := cfg.Endpoint("accounts")
-		if err != nil {
-			log.Printf("endpoint accounts: %v", err)
-			continue
-		}
-		client, err := api.NewClient(ep.BaseURL(), sess.TokenType, sess.AccessToken, ep.TimeoutMs)
+		client, err := api.NewClient(cfg.Server.BaseURL(), sess.TokenType, sess.AccessToken, cfg.Server.TimeoutMs, cfg.Endpoints)
 		if err != nil {
 			log.Printf("api client %s: %v", e, err)
 			continue

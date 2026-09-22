@@ -92,16 +92,16 @@ type loginData struct {
 }
 
 // Login 执行登录，返回 token 与 cookie
-func (c *Client) Login(email, password, revision string) (*LoginResult, error) {
+func (c *Client) Login(loginPath, email, password, revision string) (*LoginResult, error) {
 	body := loginRequest{Email: email, Password: password}
 	if revision != "" { body.LoginAgreementRevision = revision }
 	payload, _ := json.Marshal(body)
-	req, err := http.NewRequest("POST", c.host+"/api/v1/auth/login", bytes.NewReader(payload))
+	req, err := http.NewRequest("POST", c.host+loginPath, bytes.NewReader(payload))
 	if err != nil { return nil, err }
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.hc.Do(req)
-	if err != nil { return nil, fmt.Errorf("POST /api/v1/auth/login: %w", err) }
+	if err != nil { return nil, fmt.Errorf("POST %s: %w", loginPath, err) }
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	var ar apiResponse
