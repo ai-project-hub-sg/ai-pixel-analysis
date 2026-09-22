@@ -1,0 +1,6 @@
+# ai-pixel-analysis 服务配置
+# host 为完整基础地址（含 scheme），port 仅在非默认端口时填写
+[server]
+host = "https://ai-pixel.online"
+port = 0
+timeout_ms = 30000
